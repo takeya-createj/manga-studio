@@ -384,8 +384,8 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 .warnbox{background:var(--warn-soft);border:1px solid #e6d2a8;border-radius:7px;padding:7px 10px;font-size:12px;color:#6b4a11;margin-top:6px}
 .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px}
 .pcard{border:1px solid var(--line);border-radius:9px;background:var(--paper-2);overflow:hidden}
-.pcard .ph{aspect-ratio:2/3;background:#fff;display:grid;place-items:center;color:var(--ink-3);font-size:11.5px;text-align:center}
-.pcard .ph img{width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
+.pcard .ph{min-height:140px;background:#fff;display:grid;place-items:center;color:var(--ink-3);font-size:11.5px;text-align:center;padding:4px}
+.pcard .ph img{width:100%;height:auto;display:block;cursor:zoom-in}
 .pcard .pb{padding:8px 9px}
 .pcard .pn{font-size:11.5px;font-weight:700;margin-bottom:5px}
 .pcard .pa{display:flex;gap:5px;flex-wrap:wrap}
@@ -4629,7 +4629,17 @@ function bindLineEvents(p){
     el.onclick=()=>{p.panels[+el.dataset.delline].lines.splice(+el.dataset.li,1);save();renderEditor();};
   });
 }
-const TPL_W=1024,TPL_H=1536,TPL_DIR="コマ割りテンプレ";
+const TPL_DIR="コマ割りテンプレ";
+/* ①で選んだ媒体の縦横比に合わせた出力サイズ */
+function outSize(){
+  const k=previewTool||P.meta.tools[0];
+  const r=toolRatio(k);
+  const W=1024;
+  let H=Math.round(W*r[1]/r[0]);
+  if(H>1792)H=1792;
+  if(H<576)H=576;
+  return {w:W,h:H,label:(TOOLS[k]?TOOLS[k].size:"縦長 2:3"),tool:(TOOLS[k]?TOOLS[k].label:"—")};
+}
 function drawTemplate(n,w,h){
   const t=TEMPLATES[n];
   const cv=document.createElement("canvas");
@@ -4677,11 +4687,11 @@ function canvasToBlob(cv){
 }
 async function exportTemplates(){
   const nums=Object.keys(TEMPLATES);
-  if(!confirm(`コマ割りテンプレ画像を ${nums.length}枚 書き出します。\nサイズ：${TPL_W}×${TPL_H}px、白背景・コマ番号付き\n\nよろしいですか？`))return;
+  if(!confirm(`コマ割りテンプレ画像を ${nums.length}枚 書き出します。\nサイズ：${outSize().w}×${outSize().h}px、白背景・コマ番号付き\n\nよろしいですか？`))return;
   const h=await getDir();
   if(!h){
     for(const n of nums){
-      const b=await canvasToBlob(drawTemplate(+n,TPL_W,TPL_H));
+      const b=await canvasToBlob(drawTemplate(+n,outSize().w,outSize().h));
       const a=document.createElement("a");
       a.href=URL.createObjectURL(b);a.download=`テンプレ${n}.png`;
       document.body.appendChild(a);a.click();document.body.removeChild(a);
@@ -4694,7 +4704,7 @@ async function exportTemplates(){
   try{
     const d=await h.getDirectoryHandle(TPL_DIR,{create:true});
     for(const n of nums){
-      const b=await canvasToBlob(drawTemplate(+n,TPL_W,TPL_H));
+      const b=await canvasToBlob(drawTemplate(+n,outSize().w,outSize().h));
       const fh=await d.getFileHandle(`テンプレ${n}.png`,{create:true});
       const w=await fh.createWritable();
       await w.write(b);await w.close();
@@ -4705,9 +4715,9 @@ async function exportTemplates(){
   }
 }
 function previewTemplate(n){
-  const cv=drawTemplate(n,TPL_W,TPL_H);
+  const cv=drawTemplate(n,outSize().w,outSize().h);
   previewText="";
-  document.getElementById("previewTitle").textContent=`コマ割りテンプレ${n}（${TPL_W}×${TPL_H}px）`;
+  document.getElementById("previewTitle").textContent=`コマ割りテンプレ${n}（${outSize().w}×${outSize().h}px）`;
   const body=document.getElementById("previewBody");
   body.innerHTML="";
   const img=document.createElement("img");
@@ -5270,7 +5280,10 @@ async function drawPagePrompt(i){
   t+="・1枚目はコマ割りの型。この枠の位置と大きさのとおりにコマを配置すること。枠内の番号はコマ番号を表す\n";
   t+="・2枚目以降は登場人物の参照。顔・髪型・服装を完全に一致させること\n";
   t+="・テンプレ画像の番号や線そのものは描かない。コマ枠はマンガとして自然に描く\n";
-  t+="・出力は1024x1536の縦長、ページ全体を1枚で描くこと\n";
+  const sz=outSize();
+  t+=`・仕上がりは ${sz.tool} 向け。必ず ${sz.w}x${sz.h}px（${sz.label}）の比率で描くこと\n`;
+  t+="・マンガ1ページ分の全体を1枚に収める。一部を拡大したり、上下左右を切ったりしない' + BS + 'n";
+  t+="・紙面の外周に余白を取り、端のコマ・吹き出し・文字が切れないようにする' + BS + 'n";
 
   const texts=[];
   (p.panels||[]).forEach((d,j)=>{
@@ -5309,7 +5322,7 @@ async function drawOnePage(i,key,model){
     ptxt+="・絵の内容・構図・人物は前回と同じにすること\n";
   }
   const content=[{type:"text",text:ptxt}];
-  const tpl=drawTemplate(P.pages[i].tpl,1024,1536).toDataURL("image/png");
+  const tpl=drawTemplate(P.pages[i].tpl,outSize().w,outSize().h).toDataURL("image/png");
   content.push({type:"image_url",image_url:{url:tpl}});
   P.characters.forEach(c=>{
     const ref=c.ref||(c.images||[])[0];
@@ -5346,10 +5359,13 @@ async function drawPages(list){
   if(!ensureName())return;
   const model=imgModel();
   const st=document.getElementById("drawStatus");
-  let ok=0;const fails=[];
+  window.__stopDraw=false;
+  let ok=0;const fails=[];let stopped=false;
   for(let k=0;k<list.length;k++){
+    if(window.__stopDraw){stopped=true;break;}
     const i=list[k];
-    if(st)st.textContent=`描いています… ${k+1}/${list.length}（${i+1}ページ目）`;
+    const el=document.getElementById("drawStatus");
+    if(el)el.textContent=`描いています… ${k+1}/${list.length}（${i+1}ページ目）　残り ${list.length-k-1}ページ`;
     window.__drawing=i;renderDrawBox(true);
     try{
       const url=await drawOnePage(i,key,model);
@@ -5357,10 +5373,11 @@ async function drawPages(list){
       ok++;
     }catch(e){fails.push(`${i+1}ページ：${e.message}`);}
   }
-  window.__drawing=-1;
+  window.__drawing=-1;window.__stopDraw=false;
   renderDrawBox();renderOut();
   const st2=document.getElementById("drawStatus");
-  if(st2)st2.textContent=`${ok}ページ描きました。`+(fails.length?`${fails.length}ページ失敗。`:"");
+  if(st2)st2.textContent=(stopped?"中断しました。":"")+`${ok}ページ描きました。`+(fails.length?`${fails.length}ページ失敗。`:"")+(stopped?"描けた分は保存されています。":"");
+  if(stopped)toast("中断しました");
   if(fails.length)alert("失敗したページがあります。\n"+fails.join("\n"));
   else toast(ok+"ページ描きました");
 }
@@ -5388,17 +5405,25 @@ function drawOne(i,textMode){
   window.__textMode=!!textMode;
   drawPages([i]).then(()=>{window.__textMode=false;});
 }
+function stopDraw(){
+  window.__stopDraw=true;
+  const el=document.getElementById("drawStatus");
+  if(el)el.textContent="今の1ページが終わったら止まります…";
+  toast("次のページから止めます");
+}
 function renderDrawBox(keepStatus){
   const box=document.getElementById("drawBox");if(!box)return;
   const k=orKey(),n=P.pages.length,done=drawnCount();
   const model=IMG_MODELS.find(m=>m[0]===imgModel());
   const prev=keepStatus?(document.getElementById("drawStatus")||{}).textContent:"";
   box.innerHTML=`<h2>マンガの絵を作る<span class="hint">このアプリの中でページの絵まで作ります</span></h2>
-  <p class="lead">コマ割りの型とキャラ参照を添えて、ページごとに1枚描きます。できた絵は「5 校正」にも入り、絵を見ながらセリフを直せます。</p>
+  <p class="lead">コマ割りの型とキャラ参照を添えて、ページごとに1枚描きます。
+  <b>仕上がり：${outSize().tool}　${outSize().w}×${outSize().h}px（${outSize().label}）</b>— ①の活用ツールに合わせています。できた絵は「5 校正」にも入り、絵を見ながらセリフを直せます。</p>
   <div class="note ${k&&n?"ok":""}" style="line-height:2">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <button class="btn primary" onclick="drawAll()" ${k&&n?"":"disabled"}>全${n}ページの絵を作る（約${n*YEN_PER_PAGE}円）</button>
       ${done&&done<n?`<button class="btn" onclick="drawRest()">まだの ${n-done}ページだけ作る</button>`:""}
+      ${window.__drawing>=0?`<button class="btn danger" onclick="stopDraw()">ここで止める</button>`:""}
       <span style="font-size:12.5px" id="drawStatus">${prev||(!k?"AIキーを設定すると使えます。":`描けているページ：${done}/${n}　モデル：${model?model[1]:"—"}`)}</span>
     </div>
     <div style="font-size:11px;color:var(--ink-3);margin-top:5px">1ページあたり30〜60秒かかります。途中で閉じないでください。保存先フォルダを設定していれば、描けた分から自動で保存されます。</div>
