@@ -351,6 +351,13 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 .scenview .pg .n{font-weight:800;font-size:12px;color:#fff;background:var(--ink);border-radius:5px;height:24px;display:grid;place-items:center}
 .scenview .pg .t{font-size:13px;font-weight:700}
 .scenview .pg .s{font-size:12.5px;color:var(--ink-2);line-height:1.75}
+.scenview .ed{width:100%;border:1px solid transparent;border-radius:6px;background:transparent;
+  font-family:inherit;font-size:inherit;color:inherit;line-height:inherit;padding:4px 7px;resize:vertical}
+.scenview .ed:hover{background:var(--paper-2);border-color:var(--line-2)}
+.scenview .ed:focus{outline:none;background:#fff;border-color:var(--indigo);box-shadow:0 0 0 3px var(--indigo-soft)}
+.scenview .kv .row{display:grid;grid-template-columns:7em 1fr;gap:6px;align-items:start;margin-bottom:4px}
+.scenview .kv .row>b{padding-top:6px}
+.scenview .pg .t .ed{font-weight:700}
 .scenview .acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2)}
 .fixrow{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line-2)}
 .fixrow:last-child{border-bottom:none}
@@ -3344,24 +3351,24 @@ function renderScenView(){
   box.innerHTML=`<div class="scenview">
     <h4>できあがったシナリオ
       <span style="font-weight:400;font-size:11.5px;color:var(--ink-3)">全${P.pages.length}ページ${lines?`　セリフ${lines}本`:""}</span>
+      <span style="font-weight:400;font-size:11.5px;color:var(--ok)">このまま直せます（自動保存）</span>
       <span style="flex:1"></span>
-      <button class="btn sm" onclick="go('4');document.getElementById('s-logline').focus()">上の欄で直す</button>
     </h4>
     <div class="kv">
-      <div><b>あらすじ</b>${esc(sc.logline||"（未記入）")}</div>
-      <div><b>伝えたいこと</b>${esc(sc.message||"（未記入）")}</div>
-      <div><b>起</b>${esc(sc.ki||"—")}</div>
-      <div><b>承</b>${esc(sc.sho||"—")}</div>
-      <div><b>転</b>${esc(sc.ten||"—")}</div>
-      <div><b>結</b>${esc(sc.ketsu||"—")}</div>
+      ${[["logline","あらすじ"],["message","伝えたいこと"],["ki","起"],["sho","承"],["ten","転"],["ketsu","結"]]
+        .map(x=>`<div class="row"><b>${x[1]}</b>
+        <textarea class="ed" rows="1" data-sv="${x[0]}" placeholder="（未記入）">${esc(sc[x[0]]||"")}</textarea></div>`).join("")}
     </div>
     <div class="pages">
       ${P.pages.map((p,i)=>`<div class="pg">
         <div class="n">${i+1}</div>
-        <div><div class="t">${esc(p.title||"（見出しなし）")}
-          <span style="font-weight:400;color:var(--ink-3);font-size:11px">　${P.book.useChapters?`第${chapterOf(i)}章・`:""}${p.act}</span></div>
-          <div class="s">${esc(p.summary||"（未記入）")}</div>
-          ${pageText(i)?`<div class="s" style="color:var(--ink-3);margin-top:4px">${esc(pageText(i)).replace(/\n/g,"<br>")}</div>`:""}
+        <div>
+          <div class="t" style="display:flex;gap:6px;align-items:center">
+            <textarea class="ed" rows="1" data-pv="${i}" data-pf="title" placeholder="（見出し）">${esc(p.title||"")}</textarea>
+            <span style="font-weight:400;color:var(--ink-3);font-size:11px;white-space:nowrap">${P.book.useChapters?`第${chapterOf(i)}章・`:""}${p.act}</span>
+          </div>
+          <textarea class="ed s" rows="2" data-pv="${i}" data-pf="summary" placeholder="（このページで起きること）">${esc(p.summary||"")}</textarea>
+          ${pageText(i)?`<div class="s" style="color:var(--ink-3);margin-top:4px;padding:0 7px">${esc(pageText(i)).replace(/\n/g,"<br>")}</div>`:""}
         </div></div>`).join("")}
     </div>
     <div class="acts">
@@ -3374,6 +3381,31 @@ function renderScenView(){
     </div>
   </div>`;
 }
+function bindScenView(){
+  const box=document.getElementById("scenView");if(!box)return;
+  const grow=el=>{el.style.height="auto";el.style.height=(el.scrollHeight+2)+"px";};
+  box.querySelectorAll("textarea.ed").forEach(el=>{
+    grow(el);
+    el.oninput=()=>{
+      grow(el);
+      if(el.dataset.sv){P.scenario[el.dataset.sv]=el.value;}
+      else{P.pages[+el.dataset.pv][el.dataset.pf]=el.value;}
+      save();
+      clearTimeout(window.__svT);
+      window.__svT=setTimeout(()=>{
+        const a=document.activeElement;
+        const key=a&&a.dataset?(a.dataset.sv||(a.dataset.pv+"_"+a.dataset.pf)):null;
+        const pos=a&&a.selectionStart;
+        renderScenario();
+        if(key){
+          const sel=a.dataset.sv?`[data-sv="${a.dataset.sv}"]`:`[data-pv="${a.dataset.pv}"][data-pf="${a.dataset.pf}"]`;
+          const n=document.querySelector("#scenView "+sel);
+          if(n){n.focus();try{n.setSelectionRange(pos,pos);}catch(e){}}
+        }
+      },900);
+    };
+  });
+}
 function copyScenario(){
   const t=buildScenarioDoc();
   if(navigator.clipboard)navigator.clipboard.writeText(t)
@@ -3381,6 +3413,7 @@ function copyScenario(){
     .catch(()=>showPreview("scenario"));
   else showPreview("scenario");
 }
+function renderScenViewAndBind(){renderScenView();bindScenView();}
 function renderScenGen(){
   const box=document.getElementById("scenGenBox");if(!box)return;
   const k=orKey();
@@ -3481,7 +3514,7 @@ async function genScenarioMulti(n){
     const done=await runScenario(i>0,true);
     if(done){ok++;snapScenario("案"+String.fromCharCode(65+(P.scenarioVers||[]).length-1));}
   }
-  renderScenario();renderScenGen();renderScenView();renderStruct();
+  renderScenario();renderScenGen();renderScenViewAndBind();renderStruct();
   const sv2=document.getElementById("scenView");
   if(sv2)setTimeout(()=>sv2.scrollIntoView({behavior:"smooth",block:"start"}),150);
   const st2=document.getElementById("scenStatus");
@@ -3552,7 +3585,7 @@ async function genScenario(alt){
     const res=applyScenarioText(txt);
     window.__lastScenario=txt;
     if(st)st.textContent=`下書きができました。${res.pages}ページ分を入れました。`+((P.scenarioVers||[]).length?"前の案は下に残っています。":"");
-    renderScenario();renderScenGen();renderScenView();renderStruct();
+    renderScenario();renderScenGen();renderScenViewAndBind();renderStruct();
     toast("シナリオの下書きを作りました");
     const sv=document.getElementById("scenView");
     if(sv)setTimeout(()=>sv.scrollIntoView({behavior:"smooth",block:"start"}),150);
@@ -3599,7 +3632,7 @@ function renderScenario(){
     });
   }
   renderApprove("scenario","apScenario","シナリオ（文字）");
-  renderScenGen();renderScenView();renderChapters();
+  renderScenGen();renderScenViewAndBind();renderChapters();
 }
 function buildScenarioDoc(){
   let s=`【シナリオ確認用】${P.meta.title||"（タイトル未定）"}\n`;
