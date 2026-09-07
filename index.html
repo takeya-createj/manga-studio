@@ -419,7 +419,7 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
     <div class="grid3">
       <label class="field"><span>お客様のお名前<em>公開表記のまま</em></span><input type="text" id="m-client" placeholder="例）漫画 太郎 様"></label>
       <label class="field"><span>お名前のふりがな<em>当て字防止</em></span><input type="text" id="m-kana" placeholder="例）まんが たろう"></label>
-      <label class="field"><span>呼ばれ方（ニックネーム）<em>作中での呼び名になります</em></span><input type="text" id="m-nickname" placeholder="例）マンちゃん"></label>
+      <label class="field"><span>呼ばれ方（基本）<em>相手ごとの呼び分けは「登場人物」タブで</em></span><input type="text" id="m-nickname" placeholder="例）マンちゃん"></label>
     </div>
     <div class="grid3">
       <label class="field"><span>会社名・屋号</span><input type="text" id="m-company" placeholder="例）さんぷる生命"></label>
@@ -2502,6 +2502,12 @@ async function genProposals(append){
   q+=`■ 前提\n`;
   if(P.meta.client)q+=`主人公：${P.meta.client.replace(/\s*様$/,"")}\n`;
   if(P.meta.company)q+=`会社：${P.meta.company}\n`;
+  P.characters.forEach(c=>{
+    (c.calls||[]).forEach(x=>{
+      if((x.by||"").trim()&&(x.name||"").trim())
+        q+=`呼び方：${x.by.trim()}は ${c.name||"主人公"} を「${x.name.trim()}」と呼ぶ\n`;
+    });
+  });
   q+=`目的：${ucLabels()||"—"}\n掲載先：${P.meta.tools.map(k2=>TOOLS[k2].label).join("・")||"—"}\n読者：${P.meta.target||"—"}\n`;
   if(P.meta.cta)q+=`読後の行動：${P.meta.cta}\n`;
   q+=`\n■ ヒアリング\n`;
@@ -3815,7 +3821,7 @@ function dlFixList(){dl(buildFixList(),fname("未対応の修正一覧")+".txt",
 
 /* ===================== 登場人物 ===================== */
 function addChar(data){
-  P.characters.push(Object.assign({id:uid(),name:"",en:"",file:"",role:"",hair:"",outfit:"",feature:"",mark:"",images:[]},data||{}));
+  P.characters.push(Object.assign({id:uid(),name:"",en:"",file:"",role:"",hair:"",outfit:"",feature:"",mark:"",calls:[],images:[]},data||{}));
   save();renderChars();
 }
 function addCharPreset(){
@@ -3847,10 +3853,29 @@ function renderChars(){
         <input type="text" data-c="${i}" data-f="mark" value="${esc(c.mark||"")}" placeholder="例）眼鏡なし・ネイビーのジャケット"></label>
       <label class="field"><span>髪型・髪色</span><input type="text" data-c="${i}" data-f="hair" value="${esc(c.hair)}"></label>
       <label class="field"><span>服装</span><input type="text" data-c="${i}" data-f="outfit" value="${esc(c.outfit)}"></label>
-      <label class="field" style="margin-bottom:0"><span>その他の特徴・口調</span><input type="text" data-c="${i}" data-f="feature" value="${esc(c.feature)}"></label>`;
+      <label class="field"><span>その他の特徴・口調</span><input type="text" data-c="${i}" data-f="feature" value="${esc(c.feature)}"></label>
+      <div style="font-size:12px;font-weight:700;color:var(--ink-2);margin-bottom:5px">呼ばれ方<span style="font-weight:400;color:var(--ink-3)">　相手によって変わる場合は全部入れてください</span></div>
+      ${(c.calls||[]).map((x,j)=>`<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-bottom:5px">
+        <input type="text" data-call="${i}_${j}" data-cf="by" value="${esc(x.by||"")}" placeholder="誰から（例）社員">
+        <input type="text" data-call="${i}_${j}" data-cf="name" value="${esc(x.name||"")}" placeholder="呼び方（例）社長">
+        <button class="line-del" data-calldel="${i}_${j}">×</button>
+      </div>`).join("")}
+      <button class="btn sm" data-calladd="${i}" style="margin-bottom:0">＋ 呼ばれ方を追加</button>`;
     box.appendChild(d);renderThumbs(c);
   });
   box.querySelectorAll("input[data-c]").forEach(el=>{el.oninput=()=>{P.characters[+el.dataset.c][el.dataset.f]=el.value;save();};});
+  box.querySelectorAll("[data-call]").forEach(el=>{
+    const [i,j]=el.dataset.call.split("_").map(Number);
+    el.oninput=()=>{P.characters[i].calls[j][el.dataset.cf]=el.value;save();};
+  });
+  box.querySelectorAll("[data-calladd]").forEach(el=>{
+    el.onclick=()=>{const i=+el.dataset.calladd;
+      const c=P.characters[i];c.calls=c.calls||[];c.calls.push({by:"",name:""});save();renderChars();};
+  });
+  box.querySelectorAll("[data-calldel]").forEach(el=>{
+    el.onclick=()=>{const [i,j]=el.dataset.calldel.split("_").map(Number);
+      P.characters[i].calls.splice(j,1);save();renderChars();};
+  });
   box.querySelectorAll("[data-refdel2]").forEach(el=>{
     el.onclick=()=>{
       const i=+el.dataset.refdel2;
@@ -4764,6 +4789,14 @@ function commonBlock(){
   if(P.meta.client){
     s+=`\n▼ 表記の指定\n・お名前は「${P.meta.client.replace(/\s*様$/,"")}」と表記すること。読み方から別の漢字に変換しないこと。`;
     if(P.meta.nickname)s+=`\n・作中では「${P.meta.nickname}」と呼ばせること。この呼び名を勝手に変えないこと。`;
+    const calls=[];
+    P.characters.forEach(c=>{
+      (c.calls||[]).forEach(x=>{
+        if((x.by||"").trim()&&(x.name||"").trim())
+          calls.push(`・${x.by.trim()}は ${c.name||"この人物"} を「${x.name.trim()}」と呼ぶ`);
+      });
+    });
+    if(calls.length)s+=`\n▼ 呼び方の指定（セリフの中で守ること）\n`+calls.join("\n")+"\n";
     if(P.meta.kana)s+=`（読み：${P.meta.kana}）`;
     s+="\n";
     if(P.meta.company)s+=`・会社名は「${P.meta.company}」と表記すること。\n`;
