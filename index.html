@@ -382,6 +382,14 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 .readpanel .kn{width:30px;height:30px;border-radius:7px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:800}
 .readpanel .pos{font-size:11px;color:var(--ink-3);margin-bottom:5px}
 .warnbox{background:var(--warn-soft);border:1px solid #e6d2a8;border-radius:7px;padding:7px 10px;font-size:12px;color:#6b4a11;margin-top:6px}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px}
+.pcard{border:1px solid var(--line);border-radius:9px;background:var(--paper-2);overflow:hidden}
+.pcard .ph{aspect-ratio:2/3;background:#fff;display:grid;place-items:center;color:var(--ink-3);font-size:11.5px;text-align:center}
+.pcard .ph img{width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
+.pcard .pb{padding:8px 9px}
+.pcard .pn{font-size:11.5px;font-weight:700;margin-bottom:5px}
+.pcard .pa{display:flex;gap:5px;flex-wrap:wrap}
+.pcard.busy .ph{background:var(--warn-soft);color:var(--warn)}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);margin-bottom:12px}
 .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 .fixrow{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line-2)}
@@ -727,6 +735,8 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 
 <!-- ============ STEP7 作画 ============ -->
 <section id="v-7" class="view">
+  <div class="card" id="drawBox"></div>
+
   <div class="card">
     <h2>作画前チェック</h2>
     <div class="stat-row" id="statRow"></div>
@@ -5250,7 +5260,138 @@ function buildHandover(){
   return s;
 }
 function dlHandover(){dl(buildHandover(),fname("案件サマリー")+".txt","text/plain");}
+/* ページの絵を作る */
+const YEN_PER_PAGE=8;
+function drawnCount(){return P.pages.filter(p=>p.img).length;}
+async function drawPagePrompt(i){
+  const p=P.pages[i];
+  let t=harnessPagePrompt(i);
+  t+="\n\n■ 添付画像の使い方\n";
+  t+="・1枚目はコマ割りの型。この枠の位置と大きさのとおりにコマを配置すること。枠内の番号はコマ番号を表す\n";
+  t+="・2枚目以降は登場人物の参照。顔・髪型・服装を完全に一致させること\n";
+  t+="・テンプレ画像の番号や線そのものは描かない。コマ枠はマンガとして自然に描く\n";
+  t+="・出力は1024x1536の縦長、ページ全体を1枚で描くこと\n";
+  return t;
+}
+async function drawOnePage(i,key,model){
+  const content=[{type:"text",text:await drawPagePrompt(i)}];
+  const tpl=drawTemplate(P.pages[i].tpl,1024,1536).toDataURL("image/png");
+  content.push({type:"image_url",image_url:{url:tpl}});
+  P.characters.forEach(c=>{
+    const ref=c.ref||(c.images||[])[0];
+    if(ref)content.push({type:"image_url",image_url:{url:ref}});
+  });
+  const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
+    headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
+    body:JSON.stringify({model:model,modalities:["image","text"],messages:[{role:"user",content:content}]})});
+  if(!r.ok)throw new Error("通信エラー "+r.status+"："+(await r.text()).slice(0,160));
+  const j=await r.json();
+  const im=((j.choices&&j.choices[0].message.images)||[])[0];
+  if(!im)throw new Error("画像が返ってきませんでした");
+  addCost("作画",(j.usage||{}).cost);
+  return im.image_url.url;
+}
+async function savePageImage(i,url){
+  await new Promise(res=>shrink(url,1200,d=>{P.pages[i].img=d;res();}));
+  save();
+  try{
+    const h=await getDir();
+    if(h&&await ensurePerm(h)){
+      const d1=await h.getDirectoryHandle("納品_マンガ",{create:true});
+      const d2=await d1.getDirectoryHandle(baseName(),{create:true});
+      const nm=`${baseName()}_${String(i+1).padStart(2,"0")}.jpg`;
+      const fh=await d2.getFileHandle(nm,{create:true});
+      const w=await fh.createWritable();
+      await w.write(dataUrlToBlob(P.pages[i].img));await w.close();
+    }
+  }catch(e){}
+}
+async function drawPages(list){
+  const key=orKey();
+  if(!key){alert("先にAIキーを設定してください。");return;}
+  if(!ensureName())return;
+  const model=imgModel();
+  const st=document.getElementById("drawStatus");
+  let ok=0;const fails=[];
+  for(let k=0;k<list.length;k++){
+    const i=list[k];
+    if(st)st.textContent=`描いています… ${k+1}/${list.length}（${i+1}ページ目）`;
+    window.__drawing=i;renderDrawBox(true);
+    try{
+      const url=await drawOnePage(i,key,model);
+      await savePageImage(i,url);
+      ok++;
+    }catch(e){fails.push(`${i+1}ページ：${e.message}`);}
+  }
+  window.__drawing=-1;
+  renderDrawBox();renderOut();
+  const st2=document.getElementById("drawStatus");
+  if(st2)st2.textContent=`${ok}ページ描きました。`+(fails.length?`${fails.length}ページ失敗。`:"");
+  if(fails.length)alert("失敗したページがあります。\n"+fails.join("\n"));
+  else toast(ok+"ページ描きました");
+}
+function drawAll(){
+  const n=P.pages.length;
+  if(!n){alert("ページがありません。");return;}
+  const done=drawnCount();
+  let msg=`全${n}ページの絵を描きます。\n目安の費用：約${n*YEN_PER_PAGE}円　時間：${Math.ceil(n*40/60)}分ほど`;
+  if(done)msg+=`\n\n※ すでに ${done}ページ 描けています。全部描き直します。`;
+  msg+=`\n\n進めてよろしいですか？`;
+  if(!confirm(msg))return;
+  drawPages(P.pages.map((x,i)=>i));
+}
+function drawRest(){
+  const list=P.pages.map((x,i)=>i).filter(i=>!P.pages[i].img);
+  if(!list.length){alert("すべてのページが描けています。");return;}
+  if(!confirm(`まだ描けていない ${list.length}ページ を描きます。\n目安：約${list.length*YEN_PER_PAGE}円\n\n進めてよろしいですか？`))return;
+  drawPages(list);
+}
+function drawOne(i){
+  if(!confirm(`${i+1}ページ目を${P.pages[i].img?"描き直し":"描き"}ます。\n目安：約${YEN_PER_PAGE}円\n\nよろしいですか？`))return;
+  drawPages([i]);
+}
+function renderDrawBox(keepStatus){
+  const box=document.getElementById("drawBox");if(!box)return;
+  const k=orKey(),n=P.pages.length,done=drawnCount();
+  const model=IMG_MODELS.find(m=>m[0]===imgModel());
+  const prev=keepStatus?(document.getElementById("drawStatus")||{}).textContent:"";
+  box.innerHTML=`<h2>マンガの絵を作る<span class="hint">このアプリの中でページの絵まで作ります</span></h2>
+  <p class="lead">コマ割りの型とキャラ参照を添えて、ページごとに1枚描きます。できた絵は「5 校正」にも入り、絵を見ながらセリフを直せます。</p>
+  <div class="note ${k&&n?"ok":""}" style="line-height:2">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn primary" onclick="drawAll()" ${k&&n?"":"disabled"}>全${n}ページの絵を作る（約${n*YEN_PER_PAGE}円）</button>
+      ${done&&done<n?`<button class="btn" onclick="drawRest()">まだの ${n-done}ページだけ作る</button>`:""}
+      <span style="font-size:12.5px" id="drawStatus">${prev||(!k?"AIキーを設定すると使えます。":`描けているページ：${done}/${n}　モデル：${model?model[1]:"—"}`)}</span>
+    </div>
+    <div style="font-size:11px;color:var(--ink-3);margin-top:5px">1ページあたり30〜60秒かかります。途中で閉じないでください。保存先フォルダを設定していれば、描けた分から自動で保存されます。</div>
+    <div style="font-size:11.5px;margin-top:5px" data-costline></div>
+  </div>
+  ${n?`<div class="pgrid">${P.pages.map((p,i)=>`
+    <div class="pcard ${window.__drawing===i?"busy":""}">
+      <div class="ph">${p.img?`<img src="${p.img}" onclick="showPageImage(${i})">`:(window.__drawing===i?"描いています…":"未作成")}</div>
+      <div class="pb">
+        <div class="pn">${i+1}. ${esc((p.title||"").slice(0,12))||"（無題）"}</div>
+        <div class="pa">
+          <button class="btn sm" onclick="drawOne(${i})">${p.img?"作り直す":"作る"}</button>
+          ${p.img?`<button class="btn sm" onclick="showPageImage(${i})">大きく</button>`:""}
+        </div>
+      </div>
+    </div>`).join("")}</div>`:""}`;
+  renderCostLines();
+}
+function showPageImage(i){
+  const p=P.pages[i];if(!p||!p.img)return;
+  previewText="";
+  document.getElementById("previewTitle").textContent=`${i+1}ページ目${p.title?"："+p.title:""}`;
+  const pb=document.getElementById("previewBody");
+  pb.innerHTML="";
+  const img=document.createElement("img");
+  img.src=p.img;img.style.cssText="max-width:100%;height:auto;display:block;margin:0 auto;background:#fff";
+  pb.appendChild(img);
+  document.getElementById("previewOverlay").classList.add("on");
+}
 function renderOut(){
+  renderDrawBox();
   syncSelectors();
   const total=P.pages.reduce((a,p)=>a+TEMPLATES[p.tpl].count,0);
   let filled=0,lines=0,missBg=0;
