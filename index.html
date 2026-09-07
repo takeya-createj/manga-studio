@@ -1301,7 +1301,14 @@ function newPage(tpl,act,auto){
 }
 function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function lsSet(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}}
-function save(){if(!lsSet(KEY,JSON.stringify(P)))toast("この端末に保存できません。作業内容は「案件を保存」でファイルに残してください")}
+function save(){
+  const keep=(P.pages||[]).map(p=>p.img);
+  (P.pages||[]).forEach(p=>{if(p.art)delete p.img;});
+  let str="";
+  try{str=JSON.stringify(P);}catch(e){}
+  (P.pages||[]).forEach((p,i)=>{if(keep[i]!==undefined)p.img=keep[i];});
+  if(str&&!lsSet(KEY,str))toast("この端末に保存できません。作業内容は「案件を保存」でファイルに残してください");
+}
 function restore(){
   try{const s=lsGet(KEY);
     if(s){const o=JSON.parse(s),b=blankProject();
@@ -1315,7 +1322,8 @@ function restore(){
       P.threads=Object.assign({scenario:[],proof:[],layout:[],final:[]},o.threads||{});
       P.book=Object.assign({useChapters:false,layout:"course",hasIntro:true,hasOutro:true,chapters:[],cover:{title:"",subtitle:"",author:"",note:""}},o.book||{});
       P.approvals=Object.assign({scenario:false,proof:false,layout:false,final:false},o.approvals||{});
-      curStep=P.step||"1";}
+      curStep=P.step||"1";
+      setTimeout(()=>{if((P.pages||[]).some(x=>x.art&&!x.img))recomposeAll(true);},60);}
   }catch(e){}
   COMMON_RULES=lsGet(CKEY);
   if(COMMON_RULES===null)COMMON_RULES=DEFAULT_COMMON_RULES;
@@ -5303,8 +5311,8 @@ async function drawPagePrompt(i){
   t+="・テンプレ画像の番号や線そのものは描かない。コマ枠はマンガとして自然に描く\n";
   const sz=outSize();
   t+=`・仕上がりは ${sz.tool} 向け。必ず ${sz.w}x${sz.h}px（${sz.label}）の比率で描くこと\n`;
-  t+="・マンガ1ページ分の全体を1枚に収める。一部を拡大したり、上下左右を切ったりしない' + BS + 'n";
-  t+="・紙面の外周に余白を取り、端のコマ・吹き出し・文字が切れないようにする' + BS + 'n";
+  t+="・マンガ1ページ分の全体を1枚に収める。一部を拡大したり、上下左右を切ったりしない\n";
+  t+="・紙面の外周に余白を取り、端のコマが切れないようにする\n";
 
   const texts=[];
   (p.panels||[]).forEach((d,j)=>{
@@ -5314,7 +5322,18 @@ async function drawPagePrompt(i){
         texts.push(`${MARU[j+1]} ${charEn(l.charId)}：「${breakCommas(l.text.replace(/^\u300c|\u300d$/g,"")).replace(/\n/g," ")}」`);
     });
   });
-  if(texts.length){
+  if(textOn()){
+    t+="\n■ 文字は一切描かない（MANDATORY）\n";
+    t+="・セリフ・ナレーション・吹き出し・オノマトペ・看板・ロゴ・英単語を一切描かない\n";
+    t+="・文字はこちらで後から入れる。空のままにしておくこと\n";
+    t+="・各コマとも、上側の約40%は空・壁・背景などのあいた場所にする（あとで吹き出しを置くため）\n";
+    t+="・人物は各コマの中央〜下寄りに配置し、顔がコマの上端に来ないようにする\n";
+    t+="・表情と動きで感情を伝えること。文字に頼らない\n";
+    if(texts.length){
+      t+="\n■ 参考：このページで話される内容（絵には描かない。表情と動きの参考にするだけ）\n";
+      texts.forEach(x=>t+=x+"\n");
+    }
+  }else if(texts.length){
     t+="\n■ このページに描く文字は下記がすべて（MANDATORY）\n";
     texts.forEach(x=>t+=x+"\n");
     t+="・上記の文字を 一字一句そのまま 描くこと。単語や文節を繰り返さない。途中で切らない\n";
@@ -5360,7 +5379,9 @@ async function drawOnePage(i,key,model){
   return im.image_url.url;
 }
 async function savePageImage(i,url){
-  await new Promise(res=>shrink(url,1200,d=>{P.pages[i].img=d;res();}));
+  await new Promise(res=>shrink(url,1400,d=>{P.pages[i].art=d;res();}));
+  P.pages[i].img=P.pages[i].art;
+  if(textOn()){try{P.pages[i].img=await composeText(i);}catch(e){}}
   save();
   try{
     const h=await getDir();
@@ -5444,6 +5465,206 @@ function drawBarOff(){
   const s=document.getElementById("drawBarStop");
   if(s){s.disabled=false;s.textContent="ここで止める";}
 }
+/* ================= 文字はアプリが重ねる（画像AIに日本語を描かせない） ================= */
+const V_ROT="ー―‐‑–—−〜～…‥（）()「」『』〈〉《》【】｛｝[]{}＜＞<>＝=｜|";
+const V_SFT="、。，．";
+const V_SML="ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ";
+const TXT_FONT='"Yu Gothic","游ゴシック","Hiragino Kaku Gothic ProN","Noto Sans JP","MS PGothic",sans-serif';
+
+function textOn(){return P.plan.appText!==false;}
+
+function vCols(text,maxRows){
+  const cols=[];let cur=[];
+  for(const ch of String(text||"")){
+    if(ch==="\n"){if(cur.length)cols.push(cur);cur=[];continue;}
+    cur.push(ch);
+    if(cur.length>=maxRows){cols.push(cur);cur=[];}
+  }
+  if(cur.length)cols.push(cur);
+  return cols.length?cols:[[" "]];
+}
+function vDraw(ctx,cols,rightX,topY,fs,lh,colW){
+  ctx.textAlign="center";ctx.textBaseline="middle";
+  cols.forEach((col,ci)=>{
+    const x=rightX-ci*colW-colW/2;
+    col.forEach((ch,i)=>{
+      const y=topY+i*lh+lh/2;
+      ctx.save();ctx.translate(x,y);
+      if(V_ROT.indexOf(ch)>=0)ctx.rotate(Math.PI/2);
+      else if(V_SFT.indexOf(ch)>=0)ctx.translate(fs*0.30,-fs*0.34);
+      else if(V_SML.indexOf(ch)>=0)ctx.translate(fs*0.07,-fs*0.07);
+      ctx.fillText(ch,0,0);
+      ctx.restore();
+    });
+  });
+}
+function fitVert(text,boxW,boxH,maxFs,weight){
+  const t=String(text||"");
+  for(let fs=Math.max(11,Math.round(maxFs));fs>=11;fs--){
+    const lh=fs*1.06,colW=fs*1.30;
+    const maxRows=Math.max(2,Math.floor(boxH/lh));
+    const cols=vCols(t,maxRows);
+    const rows=Math.max.apply(null,cols.map(c=>c.length));
+    if(cols.length*colW<=boxW&&rows*lh<=boxH)
+      return {fs,lh,colW,cols,rows,w:cols.length*colW,h:rows*lh,weight:weight||700};
+  }
+  const fs=11,lh=fs*1.06,colW=fs*1.30;
+  const cols=vCols(t,Math.max(2,Math.floor(boxH/lh)));
+  const rows=Math.max.apply(null,cols.map(c=>c.length));
+  return {fs,lh,colW,cols,rows,w:cols.length*colW,h:rows*lh,weight:weight||700};
+}
+function drawBubble(ctx,cx,cy,rw,rh,tx,ty,kind){
+  const lw=Math.max(2,rw*0.045);
+  ctx.save();
+  ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=lw;ctx.lineJoin="round";
+  ctx.beginPath();
+  if(kind==="thought"){
+    const n=18;
+    for(let i=0;i<=n;i++){
+      const a=i/n*Math.PI*2, wob=1+(i%2?0.075:-0.045);
+      const x=cx+rw*wob*Math.cos(a), y=cy+rh*wob*Math.sin(a);
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    }
+    ctx.closePath();
+  }else if(kind==="shout"){
+    const n=26;
+    for(let i=0;i<n;i++){
+      const a=i/n*Math.PI*2, wob=(i%2?1.20:0.90);
+      const x=cx+rw*wob*Math.cos(a), y=cy+rh*wob*Math.sin(a);
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    }
+    ctx.closePath();
+  }else{
+    ctx.ellipse(cx,cy,rw,rh,0,0,Math.PI*2);
+  }
+  ctx.fill();ctx.stroke();
+  if(tx!==undefined){
+    const a=Math.atan2((ty-cy)/rh,(tx-cx)/rw),sp=0.26;
+    const p1x=cx+rw*Math.cos(a-sp),p1y=cy+rh*Math.sin(a-sp);
+    const p2x=cx+rw*Math.cos(a+sp),p2y=cy+rh*Math.sin(a+sp);
+    if(kind==="thought"){
+      for(let i=1;i<=2;i++){
+        const t=i/2.6, r=rw*0.14/i;
+        ctx.beginPath();ctx.ellipse(cx+(tx-cx)*t,cy+(ty-cy)*t,r,r,0,0,Math.PI*2);
+        ctx.fill();ctx.stroke();
+      }
+    }else{
+      ctx.beginPath();ctx.moveTo(p1x,p1y);ctx.lineTo(tx,ty);ctx.lineTo(p2x,p2y);ctx.closePath();
+      ctx.fillStyle="#fff";ctx.fill();
+      ctx.beginPath();ctx.moveTo(p1x,p1y);ctx.lineTo(tx,ty);ctx.lineTo(p2x,p2y);ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function loadImg(src){
+  return new Promise((res,rej)=>{
+    const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("絵を読み込めません"));im.src=src;
+  });
+}
+async function composeText(i){
+  const p=P.pages[i];
+  if(!p||!p.art)return null;
+  const img=await loadImg(p.art);
+  const W=img.naturalWidth||img.width,H=img.naturalHeight||img.height;
+  const cv=document.createElement("canvas");cv.width=W;cv.height=H;
+  const ctx=cv.getContext("2d");
+  ctx.drawImage(img,0,0,W,H);
+  const t=TEMPLATES[p.tpl]||TEMPLATES[1];
+  (t.panels||[]).forEach((pn,j)=>{
+    const d=(p.panels||[])[j]||{};
+    const X=pn.r[0]/100*W,Y=pn.r[1]/100*H,PW=pn.r[2]/100*W,PH=pn.r[3]/100*H;
+    const pad=Math.min(PW,PH)*0.04;
+    let leftUsed=0;
+
+    /* ナレーション：左上の角に四角い枠 */
+    const nar=(d.narration||"").trim();
+    if(nar){
+      const f=fitVert(breakCommas(nar),PW*0.22,PH*0.74,Math.min(PH*0.062,PW*0.048,32),600);
+      ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
+      const bw=f.w+f.fs*0.8,bh=f.h+f.fs*0.8,bx=X+pad,by=Y+pad;
+      ctx.save();
+      ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=Math.max(2,f.fs*0.09);
+      ctx.fillRect(bx,by,bw,bh);ctx.strokeRect(bx,by,bw,bh);
+      ctx.fillStyle="#111";
+      vDraw(ctx,f.cols,bx+bw-f.fs*0.40,by+f.fs*0.40,f.fs,f.lh,f.colW);
+      ctx.restore();
+      leftUsed=bw+pad;
+    }
+
+    /* セリフ：読み順に右から左へ */
+    const lines=(d.lines||[]).filter(l=>l&&l.text&&l.text.trim());
+    if(lines.length){
+      const aX=X+leftUsed+pad,aW=Math.max(PW*0.30,PW-leftUsed-pad*2),slot=aW/lines.length;
+      lines.forEach((l,k)=>{
+        const txt=breakCommas(String(l.text).replace(/^\u300c|\u300d$/g,""));
+        const kd=l.kind||"normal";
+        const mag=kd==="shout"?1.22:(kd==="small"?0.80:1);
+        const f=fitVert(txt,slot*0.66,PH*0.46,Math.min(PH*0.075,slot*0.26,36)*mag,kd==="shout"?800:700);
+        ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
+        const bal=kd==="shout"?1.55:1.75;
+        const rw=(f.w+f.fs*bal)/2,rh=(f.h+f.fs*(kd==="shout"?1.15:1.35))/2;
+        let cx=aX+aW-(k+0.5)*slot,cy=Y+pad+rh+PH*0.015;
+        cx=Math.max(aX+rw+2,Math.min(aX+aW-rw-2,cx));
+        cy=Math.max(Y+rh+3,Math.min(Y+PH*0.62,cy));
+        const tx=Math.max(X+PW*0.10,Math.min(X+PW*0.90,aX+aW-(k+0.5)*slot)),
+              ty=Math.min(Y+PH*0.86,cy+rh+PH*0.14);
+        const kind=l.kind||"normal";
+        drawBubble(ctx,cx,cy,rw,rh,tx,ty,kind);
+        ctx.save();ctx.fillStyle="#111";
+        ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
+        vDraw(ctx,f.cols,cx+f.w/2,cy-f.h/2,f.fs,f.lh,f.colW);
+        ctx.restore();
+      });
+    }
+
+    /* オノマトペ：白抜きの太字 */
+    const ono=(d.ono||"").trim();
+    if(ono){
+      const f=fitVert(ono,PW*0.30,PH*0.40,Math.min(PH*0.16,PW*0.13,64),800);
+      ctx.save();
+      ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
+      ctx.lineWidth=Math.max(3,f.fs*0.20);ctx.strokeStyle="#fff";ctx.lineJoin="round";
+      const rx=Math.min(X+PW-pad,X+leftUsed+pad+f.w+f.fs*0.3),ty2=Y+PH*0.54;
+      ctx.textAlign="center";ctx.textBaseline="middle";
+      f.cols.forEach((col,ci)=>{
+        const x=rx-ci*f.colW-f.colW/2;
+        col.forEach((ch,ii)=>{
+          const y=ty2+ii*f.lh+f.lh/2;
+          ctx.save();ctx.translate(x,y);ctx.rotate(-0.06);
+          if(V_ROT.indexOf(ch)>=0)ctx.rotate(Math.PI/2);
+          ctx.strokeText(ch,0,0);ctx.fillStyle="#111";ctx.fillText(ch,0,0);
+          ctx.restore();
+        });
+      });
+      ctx.restore();
+    }
+  });
+  return cv.toDataURL("image/jpeg",0.9);
+}
+async function recompose(i,quiet){
+  const p=P.pages[i];
+  if(!p||!p.art){if(!quiet)alert(`${i+1}ページ目は、文字なしの絵がまだありません。\n一度「作り直す」を押してください。`);return false;}
+  try{
+    p.img=textOn()?await composeText(i):p.art;
+    return true;
+  }catch(e){p.img=p.art;return false;}
+}
+async function recomposeAll(quiet){
+  const list=P.pages.map((x,i)=>i).filter(i=>P.pages[i].art);
+  if(!list.length){if(!quiet)alert("文字なしの絵がまだありません。先に絵を作ってください。");return;}
+  for(const i of list)await recompose(i,true);
+  save();
+  if(!quiet){renderDrawBox();renderOut();toast(list.length+"ページの文字を入れ直しました（無料）");}
+  else renderDrawBox();
+}
+async function recomposeOne(i){
+  const ok=await recompose(i);
+  if(ok){save();renderDrawBox();renderOut();toast("文字を入れ直しました");}
+}
+function toggleAppText(v){
+  P.plan.appText=!!v;save();
+  recomposeAll(false);
+}
 function stopDraw(){
   window.__stopDraw=true;
   const el=document.getElementById("drawStatus");
@@ -5460,6 +5681,14 @@ function renderDrawBox(keepStatus){
   const model=IMG_MODELS.find(m=>m[0]===imgModel());
   const prev=keepStatus?(document.getElementById("drawStatus")||{}).textContent:"";
   box.innerHTML=`<h2>マンガの絵を作る<span class="hint">このアプリの中でページの絵まで作ります</span></h2>
+  <div class="note ${textOn()?"ok":"warn"}" style="margin-bottom:10px">
+    <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer">
+      <input type="checkbox" style="width:auto;margin-top:3px" ${textOn()?"checked":""} onchange="toggleAppText(this.checked)">
+      <span><b>セリフと吹き出しはこのアプリが入れる（推奨）</b><br>
+      <span style="font-size:11.5px;color:var(--ink-2)">画像AIは漢字を正しく描けません。AIには絵だけ描かせ、文字はあとからアプリが重ねます。
+      <b>文字化けは起きません。</b>セリフを直したときは「文字を入れ直す」を押すだけで、無料・一瞬で反映されます（絵は描き直しません）。</span></span>
+    </label>
+  </div>
   <p class="lead">コマ割りの型とキャラ参照を添えて、ページごとに1枚描きます。
   <b>仕上がり：${outSize().tool}　${outSize().w}×${outSize().h}px（${outSize().label}）</b>— ①の活用ツールに合わせています。できた絵は「5 校正」にも入り、絵を見ながらセリフを直せます。</p>
   <div class="note ${k&&n?"ok":""}" style="line-height:2">
@@ -5467,6 +5696,7 @@ function renderDrawBox(keepStatus){
       <button class="btn primary" onclick="drawAll()" ${k&&n?"":"disabled"}>全${n}ページの絵を作る（約${n*YEN_PER_PAGE}円）</button>
       ${done&&done<n?`<button class="btn" onclick="drawRest()">まだの ${n-done}ページだけ作る</button>`:""}
       <button class="btn danger" onclick="stopDraw()" ${window.__drawing>=0?"":"disabled title='描いている間だけ押せます'"}>ここで止める</button>
+      ${P.pages.some(x=>x.art)?`<button class="btn" onclick="recomposeAll(false)">全ページの文字を入れ直す（無料）</button>`:""}
       <span style="font-size:12.5px" id="drawStatus">${prev||(!k?"AIキーを設定すると使えます。":`描けているページ：${done}/${n}　モデル：${model?model[1]:"—"}`)}</span>
     </div>
     <div style="font-size:11px;color:var(--ink-3);margin-top:5px">1ページあたり30〜60秒かかります。途中で閉じないでください。保存先フォルダを設定していれば、描けた分から自動で保存されます。<br><b>描いている間は画面の下に「ここで止める」ボタンが出ます。</b>縦横比などがおかしいと気づいたら、いつでもそこで止められます。</div>
@@ -5479,7 +5709,8 @@ function renderDrawBox(keepStatus){
         <div class="pn">${i+1}. ${esc((p.title||"").slice(0,12))||"（無題）"}</div>
         <div class="pa">
           <button class="btn sm" onclick="drawOne(${i})">${p.img?"作り直す":"作る"}</button>
-          ${p.img?`<button class="btn sm" onclick="drawOne(${i},true)">文字を直す</button>`:""}
+          ${p.art?`<button class="btn sm" onclick="recomposeOne(${i})">文字を入れ直す</button>`
+            :(p.img?`<button class="btn sm" onclick="drawOne(${i},true)">文字を直す</button>`:"")}
           ${p.img?`<button class="btn sm" onclick="showPageImage(${i})">大きく</button>`:""}
         </div>
       </div>
