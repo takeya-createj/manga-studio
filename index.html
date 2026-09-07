@@ -5579,7 +5579,7 @@ async function composeText(i){
     /* ナレーション：左上の角に四角い枠 */
     const nar=(d.narration||"").trim();
     if(nar){
-      const f=fitVert(breakCommas(nar),PW*0.22,PH*0.74,Math.min(PH*0.062,PW*0.048,32),600);
+      const f=fitVert(breakCommas(nar),PW*0.26,PH*0.72,Math.min(PH*0.068,PW*0.052,34),600);
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
       const bw=f.w+f.fs*0.8,bh=f.h+f.fs*0.8,bx=X+pad,by=Y+pad;
       ctx.save();
@@ -5624,7 +5624,13 @@ async function composeText(i){
       ctx.save();
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
       ctx.lineWidth=Math.max(3,f.fs*0.20);ctx.strokeStyle="#fff";ctx.lineJoin="round";
-      const rx=Math.min(X+PW-pad,X+leftUsed+pad+f.w+f.fs*0.3),ty2=Y+PH*0.54;
+      const oW=f.w,oH=f.h;
+      let rx=X+leftUsed+pad+oW;
+      rx=Math.min(X+PW-pad,Math.max(X+leftUsed+pad+oW,rx));
+      if(rx-oW<X+leftUsed+pad)rx=X+leftUsed+pad+oW;
+      if(rx>X+PW-pad)rx=X+PW-pad;
+      let ty2=Y+PH*0.52;
+      if(ty2+oH>Y+PH-pad)ty2=Math.max(Y+pad,Y+PH-pad-oH);
       ctx.textAlign="center";ctx.textBaseline="middle";
       f.cols.forEach((col,ci)=>{
         const x=rx-ci*f.colW-f.colW/2;
