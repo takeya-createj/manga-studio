@@ -390,6 +390,21 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 .pcard .pn{font-size:11.5px;font-weight:700;margin-bottom:5px}
 .pcard .pa{display:flex;gap:5px;flex-wrap:wrap}
 .pcard.busy .ph{background:var(--warn-soft);color:var(--warn)}
+/* 描いている間、画面の下にさがさないで出すバー */
+#drawBar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(140%);
+  z-index:9500;display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center;
+  background:#1d1a16;color:#fff;border-radius:12px;padding:12px 18px;max-width:min(680px,94vw);
+  box-shadow:0 10px 34px rgba(0,0,0,.34);transition:transform .22s ease;pointer-events:none}
+#drawBar.on{transform:translateX(-50%) translateY(0);pointer-events:auto}
+#drawBar .spin{width:16px;height:16px;border-radius:50%;flex:0 0 auto;
+  border:2.5px solid rgba(255,255,255,.28);border-top-color:#fff;animation:drawspin .8s linear infinite}
+@keyframes drawspin{to{transform:rotate(360deg)}}
+#drawBar .txt{font-size:13px;font-weight:700;line-height:1.6}
+#drawBar .sub{font-size:11px;font-weight:400;color:#c9c2b6;display:block}
+#drawBar button{background:#c8452f;color:#fff;border:0;border-radius:8px;padding:9px 16px;
+  font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap}
+#drawBar button:hover{background:#a5301c}
+#drawBar button[disabled]{background:#6b625a;cursor:default}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);margin-bottom:12px}
 .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 .fixrow{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line-2)}
@@ -877,6 +892,12 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
   </div>
 </div></div>
 <div class="toast" id="toast"></div>
+<div id="drawBar">
+  <div class="spin"></div>
+  <div class="txt"><span id="drawBarMain">描いています…</span>
+    <span class="sub" id="drawBarSub">1ページ 30〜60秒。このタブを閉じないでください</span></div>
+  <button id="drawBarStop" onclick="stopDraw()">ここで止める</button>
+</div>
 
 <script>
 /* ===================== コマ割りテンプレート ===================== */
@@ -5366,6 +5387,10 @@ async function drawPages(list){
     const i=list[k];
     const el=document.getElementById("drawStatus");
     if(el)el.textContent=`描いています… ${k+1}/${list.length}（${i+1}ページ目）　残り ${list.length-k-1}ページ`;
+    drawBar(`${i+1}ページ目を描いています…（${k+1}/${list.length}）`,
+            list.length-k-1>0
+              ?`あと ${list.length-k-1}ページ。止めても、描けた分は保存されます`
+              :"これが最後の1ページです");
     window.__drawing=i;renderDrawBox(true);
     try{
       const url=await drawOnePage(i,key,model);
@@ -5374,6 +5399,7 @@ async function drawPages(list){
     }catch(e){fails.push(`${i+1}ページ：${e.message}`);}
   }
   window.__drawing=-1;window.__stopDraw=false;
+  drawBarOff();
   renderDrawBox();renderOut();
   const st2=document.getElementById("drawStatus");
   if(st2)st2.textContent=(stopped?"中断しました。":"")+`${ok}ページ描きました。`+(fails.length?`${fails.length}ページ失敗。`:"")+(stopped?"描けた分は保存されています。":"");
@@ -5405,10 +5431,27 @@ function drawOne(i,textMode){
   window.__textMode=!!textMode;
   drawPages([i]).then(()=>{window.__textMode=false;});
 }
+function drawBar(main,sub){
+  const b=document.getElementById("drawBar");if(!b)return;
+  b.classList.add("on");
+  const m=document.getElementById("drawBarMain"),u=document.getElementById("drawBarSub");
+  if(m)m.textContent=main;
+  if(u&&sub!==undefined)u.textContent=sub;
+}
+function drawBarOff(){
+  const b=document.getElementById("drawBar");if(!b)return;
+  b.classList.remove("on");
+  const s=document.getElementById("drawBarStop");
+  if(s){s.disabled=false;s.textContent="ここで止める";}
+}
 function stopDraw(){
   window.__stopDraw=true;
   const el=document.getElementById("drawStatus");
   if(el)el.textContent="今の1ページが終わったら止まります…";
+  const s=document.getElementById("drawBarStop");
+  if(s){s.disabled=true;s.textContent="止めています…";}
+  drawBar("今の1ページが終わったら止まります",
+          "描けた分はそのまま保存されます");
   toast("次のページから止めます");
 }
 function renderDrawBox(keepStatus){
@@ -5423,10 +5466,10 @@ function renderDrawBox(keepStatus){
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <button class="btn primary" onclick="drawAll()" ${k&&n?"":"disabled"}>全${n}ページの絵を作る（約${n*YEN_PER_PAGE}円）</button>
       ${done&&done<n?`<button class="btn" onclick="drawRest()">まだの ${n-done}ページだけ作る</button>`:""}
-      ${window.__drawing>=0?`<button class="btn danger" onclick="stopDraw()">ここで止める</button>`:""}
+      <button class="btn danger" onclick="stopDraw()" ${window.__drawing>=0?"":"disabled title='描いている間だけ押せます'"}>ここで止める</button>
       <span style="font-size:12.5px" id="drawStatus">${prev||(!k?"AIキーを設定すると使えます。":`描けているページ：${done}/${n}　モデル：${model?model[1]:"—"}`)}</span>
     </div>
-    <div style="font-size:11px;color:var(--ink-3);margin-top:5px">1ページあたり30〜60秒かかります。途中で閉じないでください。保存先フォルダを設定していれば、描けた分から自動で保存されます。</div>
+    <div style="font-size:11px;color:var(--ink-3);margin-top:5px">1ページあたり30〜60秒かかります。途中で閉じないでください。保存先フォルダを設定していれば、描けた分から自動で保存されます。<br><b>描いている間は画面の下に「ここで止める」ボタンが出ます。</b>縦横比などがおかしいと気づいたら、いつでもそこで止められます。</div>
     <div style="font-size:11.5px;margin-top:5px" data-costline></div>
   </div>
   ${n?`<div class="pgrid">${P.pages.map((p,i)=>`
