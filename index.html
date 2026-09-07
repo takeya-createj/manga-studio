@@ -417,13 +417,13 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
   <div class="card">
     <h2>③ お客様・案件の情報</h2>
     <div class="grid3">
-      <label class="field"><span>お客様のお名前<em>公開表記のまま</em></span><input type="text" id="m-client" placeholder="例）福田 嘉典 様"></label>
-      <label class="field"><span>お名前のふりがな<em>当て字防止</em></span><input type="text" id="m-kana" placeholder="例）ふくだ よしのり"></label>
-      <label class="field"><span>呼ばれ方（ニックネーム）<em>作中での呼び名になります</em></span><input type="text" id="m-nickname" placeholder="例）福ちゃん"></label>
+      <label class="field"><span>お客様のお名前<em>公開表記のまま</em></span><input type="text" id="m-client" placeholder="例）漫画 太郎 様"></label>
+      <label class="field"><span>お名前のふりがな<em>当て字防止</em></span><input type="text" id="m-kana" placeholder="例）まんが たろう"></label>
+      <label class="field"><span>呼ばれ方（ニックネーム）<em>作中での呼び名になります</em></span><input type="text" id="m-nickname" placeholder="例）マンちゃん"></label>
     </div>
     <div class="grid3">
-      <label class="field"><span>会社名・屋号</span><input type="text" id="m-company" placeholder="例）メットライフ生命"></label>
-      <label class="field"><span>作品タイトル<em>あとからでOK</em></span><input type="text" id="m-title" placeholder="例）保険屋・福ちゃん奮闘記"></label>
+      <label class="field"><span>会社名・屋号</span><input type="text" id="m-company" placeholder="例）さんぷる生命"></label>
+      <label class="field"><span>作品タイトル<em>あとからでOK</em></span><input type="text" id="m-title" placeholder="例）保険屋・マンちゃん奮闘記"></label>
       <label class="field"><span>ヒアリング予定日</span><input type="date" id="m-hdate"></label>
     </div>
     <div class="grid3">
@@ -3426,7 +3426,7 @@ function renderScenario(){
         <td><select data-sp="${i}" data-sf="act">${ACTS.map(a=>`<option ${p.act===a.key?"selected":""}>${a.key}</option>`).join("")}</select>
         <div style="margin-top:4px"><span class="act-badge" style="background:${c.color}">${p.act}</span></div></td>
         <td><input type="text" data-sp="${i}" data-sf="title" value="${esc(p.title)}" placeholder="例）家計の見える化"></td>
-        <td><textarea data-sp="${i}" data-sf="summary" placeholder="例）福ちゃんが家計表を広げ、毎月の保険料の多さに夫婦が絶句する。">${esc(p.summary)}</textarea></td></tr>`;
+        <td><textarea data-sp="${i}" data-sf="summary" placeholder="例）マンちゃんが家計表を広げ、毎月の保険料の多さに夫婦が絶句する。">${esc(p.summary)}</textarea></td></tr>`;
     });
     t.innerHTML=h;
     t.querySelectorAll("[data-sp]").forEach(el=>{
@@ -3742,8 +3742,8 @@ function renderChars(){
       </div>`:""}
       <div class="thumbs" id="th-${c.id}"></div>
       <div class="drop" data-drop="${i}">画像をドラッグ＆ドロップ／クリックして選択<br><span style="font-size:11px">この枠をクリックしてから Ctrl+V でも貼り付けできます</span></div>
-      <label class="field"><span>名前・呼び名</span><input type="text" data-c="${i}" data-f="name" value="${esc(c.name)}" placeholder="例）福ちゃん"></label>
-      <label class="field"><span>参照ファイル名 <em>コミクルに登録した画像名</em></span><input type="text" data-c="${i}" data-f="file" value="${esc(c.file)}" placeholder="例）fukuchan.png"></label>
+      <label class="field"><span>名前・呼び名</span><input type="text" data-c="${i}" data-f="name" value="${esc(c.name)}" placeholder="例）マンちゃん"></label>
+      <label class="field"><span>参照ファイル名 <em>コミクルに登録した画像名</em></span><input type="text" data-c="${i}" data-f="file" value="${esc(c.file)}" placeholder="例）manchan.png"></label>
       <label class="field"><span>役どころ</span><input type="text" data-c="${i}" data-f="role" value="${esc(c.role)}" placeholder="例）主人公／相談者／妻"></label>
       <label class="field"><span>英語名（大文字）<em>吹き出しの持ち主ラベルに使います</em></span>
         <input type="text" data-c="${i}" data-f="en" value="${esc(c.en||"")}" placeholder="例）TAKEYA"></label>
@@ -4020,7 +4020,7 @@ function renderEditor(){
         <span style="font-size:11px;color:var(--ink-3)">${pn.en}</span><div class="sp"></div></header>
       <div class="panel-body">
         <label class="field"><span>このコマの絵の内容<em>誰が何をしているか</em></span>
-          <textarea data-p="${o.idx}" data-f="bg" placeholder="例）福ちゃんが資料を広げ、真剣な表情で説明している。">${esc(d.bg)}</textarea></label>
+          <textarea data-p="${o.idx}" data-f="bg" placeholder="例）マンちゃんが資料を広げ、真剣な表情で説明している。">${esc(d.bg)}</textarea></label>
         <div class="chips" style="margin-bottom:12px">${["アップ","バストショット","全身","引きの構図","笑顔","真剣な表情","驚いた表情","涙ぐむ","手元のアップ"]
           .map(c=>`<button class="chip" data-chip="${o.idx}" data-txt="${c}">＋ ${c}</button>`).join("")}</div>
 
