@@ -359,6 +359,31 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 .scenview .kv .row>b{padding-top:6px}
 .scenview .pg .t .ed{font-weight:700}
 .scenview .acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2)}
+/* 確認すべき箱所の色分け */
+.chk{border-left:5px solid var(--line);border-radius:0 8px 8px 0;padding:9px 12px;margin-bottom:7px;background:#fff}
+.chk .lab{font-size:10.5px;font-weight:800;letter-spacing:.06em;margin-bottom:3px}
+.chk .val{font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-word}
+.chk.narr{border-left-color:#7a6bb5;background:#f4f1fb}
+.chk.narr .lab{color:#5c4f96}
+.chk.talk{border-left-color:#2f7a52;background:#eef7f1}
+.chk.talk .lab{color:#226643}
+.chk.art{border-left-color:#b4740f;background:#fdf7ec}
+.chk.art .lab{color:#8a5a0b}
+.chk.bgc{border-left-color:#2f4a6b;background:#eef2f8}
+.chk.bgc .lab{color:#28405c}
+.chk.ono{border-left-color:#c8452f;background:#fbeeeb}
+.chk.ono .lab{color:#a5301c}
+.chk.empty{border-left-color:#d8d2c4;background:#faf8f3}
+.chk.empty .val{color:var(--ink-3)}
+.readpage{border:1px solid var(--line);border-radius:10px;background:var(--paper-2);padding:14px;margin-bottom:12px}
+.readpage>h4{font-family:var(--display);font-size:13.5px;font-weight:800;margin-bottom:10px;
+  display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding-bottom:8px;border-bottom:1px solid var(--line-2)}
+.readpanel{display:grid;grid-template-columns:34px 1fr;gap:10px;margin-bottom:12px}
+.readpanel .kn{width:30px;height:30px;border-radius:7px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:800}
+.readpanel .pos{font-size:11px;color:var(--ink-3);margin-bottom:5px}
+.warnbox{background:var(--warn-soft);border:1px solid #e6d2a8;border-radius:7px;padding:7px 10px;font-size:12px;color:#6b4a11;margin-top:6px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);margin-bottom:12px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 .fixrow{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line-2)}
 .fixrow:last-child{border-bottom:none}
 .fixrow .kn{width:28px;height:28px;border-radius:6px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800}
@@ -689,6 +714,7 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
     </aside>
     <div>
       <div class="card" style="margin-bottom:16px" id="autoBox"></div>
+      <div class="card" style="margin-bottom:16px" id="readAll"></div>
       <div class="card" style="margin-bottom:16px" id="pageEditor"></div>
       <div class="card">
         <h2>コマ割りへのご意見・修正のやり取り<span id="lyCount"></span></h2>
@@ -4282,6 +4308,78 @@ function applyPanelsText(txt){
   save();
   return filled;
 }
+function panelIssues(pi,j){
+  const p=P.pages[pi],d=p.panels[j]||{},out=[];
+  (d.lines||[]).forEach(l=>{
+    if(l.text&&l.text.length>30)out.push(`セリフが${l.text.length}字。30字以内にしたい`);
+    if(l.text&&/[\u3001\uff0c]/.test(l.text))out.push("読点「、」を使っている（自動で改行になります）");
+    if(!l.charId)out.push("話者が決まっていない");
+  });
+  if(!d.bg||!d.bg.trim())out.push("絵の内容が空");
+  const cast=[...new Set(((d.cast||[]).concat((d.lines||[]).map(l=>l.charId))).filter(x=>x&&x!=="__other"))];
+  if(cast.length>=2&&!(d.lines||[]).length)out.push("人が2人以上いるのにセリフがない");
+  return out;
+}
+function renderReadAll(){
+  const box=document.getElementById("readAll");if(!box)return;
+  if(!P.pages.length){box.innerHTML="";return;}
+  const only=window.__readIssueOnly;
+  let html=`<h2>全ページをざっと読む<span class="hint">
+    <label style="font-size:11.5px;font-weight:400;display:inline-flex;gap:6px;align-items:center;cursor:pointer">
+      <input type="checkbox" id="readIssue" ${only?"checked":""} style="width:auto"> 要確認のページだけ</label></span></h2>
+  <div class="legend">
+    <span><i style="background:#7a6bb5"></i>ナレーション</span>
+    <span><i style="background:#2f7a52"></i>セリフ</span>
+    <span><i style="background:#b4740f"></i>絵の内容</span>
+    <span><i style="background:#2f4a6b"></i>背景</span>
+    <span><i style="background:#c8452f"></i>オノマトペ</span>
+    <span><i style="background:#d8d2c4"></i>未入力</span>
+  </div>`;
+  let shown=0;
+  P.pages.forEach((p,i)=>{
+    const t=TEMPLATES[p.tpl];
+    const order=t.panels.map((x,j)=>({j,read:x.read})).sort((a,b)=>a.read-b.read);
+    const pageIssues=order.reduce((a,o)=>a.concat(panelIssues(i,o.j)),[]);
+    if(only&&!pageIssues.length)return;
+    shown++;
+    html+=`<div class="readpage">
+      <h4>${i+1}ページ目　${esc(p.title||"（見出しなし）")}
+        <span class="act-badge" style="background:${(ACTS.find(a=>a.key===p.act)||ACTS[4]).color}">${p.act}</span>
+        <span style="font-weight:400;font-size:11px;color:var(--ink-3)">テンプレ${p.tpl}・${t.name}</span>
+        ${pageIssues.length?`<span class="badge-fix">要確認 ${pageIssues.length}</span>`:""}
+        <span style="flex:1"></span>
+        <button class="btn sm" data-goedit="${i}">このページを直す</button>
+      </h4>`;
+    order.forEach(o=>{
+      const d=p.panels[o.j]||{},pn=t.panels[o.j];
+      const iss=panelIssues(i,o.j);
+      html+=`<div class="readpanel">
+        <div class="kn">${MARU[o.j+1]}</div>
+        <div>
+          <div class="pos">${pn.pos}　読む順 ${o.read}番目</div>
+          ${d.narration?`<div class="chk narr"><div class="lab">ナレーション</div><div class="val">${esc(d.narration)}</div></div>`:""}
+          ${(d.lines||[]).filter(l=>l.text).map(l=>`<div class="chk talk">
+            <div class="lab">セリフ　${esc(charName(l.charId)||"話者未設定")}</div>
+            <div class="val">「${esc(l.text)}」</div></div>`).join("")}
+          <div class="chk ${d.bg?"art":"empty"}"><div class="lab">絵の内容</div>
+            <div class="val">${esc(d.bg||"（未入力）")}</div></div>
+          ${d.bgType?`<div class="chk bgc"><div class="lab">背景</div><div class="val">${d.bgType} ${esc(bgLabel(d.bgType))}</div></div>`:""}
+          ${d.ono?`<div class="chk ono"><div class="lab">オノマトペ</div><div class="val">${esc(d.ono)}</div></div>`:""}
+          ${iss.length?`<div class="warnbox">${iss.map(x=>"・"+esc(x)).join("<br>")}</div>`:""}
+        </div></div>`;
+    });
+    html+=`</div>`;
+  });
+  if(!shown)html+=`<div class="note ok"><b>要確認のページはありません。</b>全ページ、セリフと絵の内容が揃っています。</div>`;
+  box.innerHTML=html;
+  const ci=document.getElementById("readIssue");
+  if(ci)ci.onchange=()=>{window.__readIssueOnly=ci.checked;renderReadAll();};
+  box.querySelectorAll("[data-goedit]").forEach(el=>{
+    el.onclick=()=>{curPage=+el.dataset.goedit;renderPages();
+      const pe=document.getElementById("pageEditor");
+      if(pe)pe.scrollIntoView({behavior:"smooth",block:"start"});};
+  });
+}
 function renderAutoBox(){
   const box=document.getElementById("autoBox");if(!box)return;
   const k=orKey();
@@ -4340,7 +4438,7 @@ async function autoAll(){
       break;
     }
   }
-  renderPages();renderAutoBox();
+  renderPages();renderAutoBox();renderReadAll();
   const st2=document.getElementById("autoStatus");
   if(st2)st2.textContent=`できました。左のページ一覧から確認して、気になるところを直してください。`;
   if(b)b.disabled=false;
@@ -4367,7 +4465,7 @@ function renderPages(){
     d.onclick=()=>{curPage=i;renderPages();};
     rail.appendChild(d);
   });
-  renderEditor();syncSelectors();renderAutoBox();renderApprove("layout","apLayout","コマ割り");
+  renderEditor();syncSelectors();renderAutoBox();renderReadAll();renderApprove("layout","apLayout","コマ割り");
 }
 function renderEditor(){
   const box=document.getElementById("pageEditor");
