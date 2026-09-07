@@ -436,6 +436,11 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
       <label class="field"><span>1ページあたりのコマ割り</span><select id="m-deftpl"></select></label>
     </div>
     <label class="field"><span>読者（誰に届けるか）</span><input type="text" id="m-target" placeholder="例）子育て中で老後資金が不安な30〜40代"></label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px">
+      <button class="btn sm" onclick="fillBlanks()">空いている欄を自動で埋める</button>
+      <span style="font-size:11.5px;color:var(--ink-3)">ヒアリングの回答・URLの読み取り結果・登場人物・採用した構成案から拾います。入力済みの欄は変えません。</span>
+    </div>
+    <div id="fillResult"></div>
     <div id="pageCountAdvice"></div>
     <div id="priceBox"></div>
     <div id="structView"></div>
@@ -1755,6 +1760,17 @@ function renderPrice(){
   document.getElementById("pr-base").oninput=ev=>{P.meta.priceBase=+ev.target.value||0;save();renderPrice();renderBilling();};
   document.getElementById("pr-per").oninput=ev=>{P.meta.pricePerPage=+ev.target.value||0;save();renderPrice();renderBilling();};
 }
+function fillBlanks(){
+  const done=autoFillMeta();
+  bindMeta();renderNow();renderChars();
+  const box=document.getElementById("fillResult");
+  if(box)box.innerHTML=done.length
+    ?`<div class="note ok">埋めました：<b>${done.join("・")}</b><br>
+       <span style="font-size:11.5px">違っていたら直接書き換えてください。入力済みの欄は変えていません。</span></div>`
+    :`<div class="note">埋められる空欄がありませんでした。<br>
+       <span style="font-size:11.5px">ヒアリングがまだ空か、すでに全部埋まっています。</span></div>`;
+  if(done.length)toast(done.length+"項目を埋めました");
+}
 function renderPageAdvice(){
   const box=document.getElementById("pageCountAdvice");if(!box)return;
   const n=P.meta.pagecount||0;
@@ -2030,6 +2046,70 @@ const PROFILE_ITEMS=[
   ["H","お客様の声","原文のまま1〜3件"],
   ["I","問い合わせ方法・CTAの文言",""]
 ];
+/* ヒアリングの回答から、言葉を含む質問の答えを探す */
+function answerBy(words){
+  const a=P.hearing.answers||{};
+  const qs=questions();
+  for(const w of words){
+    for(const q of qs){
+      if(q.q.indexOf(w)>=0){
+        const v=(a[q.id]||"").trim();
+        if(v)return v;
+      }
+    }
+  }
+  return "";
+}
+function firstLine(t,max){
+  const v=String(t||"").split(/[\n\u3002]/)[0].trim();
+  return max&&v.length>max?v.slice(0,max):v;
+}
+/* 空欄の案件情報を、拾えるところから自動で埋める */
+function autoFillMeta(){
+  const done=applyProfileToMeta();
+  const pf=P.hearing.profile||{};
+  const hero=P.characters[0];
+
+  // お客様のお名前（主人公名から）
+  if(!(P.meta.client||"").trim()&&hero&&(hero.name||"").trim()){
+    P.meta.client=hero.name.trim();done.push("お客様のお名前");
+  }
+  // 呼ばれ方
+  if(!(P.meta.nickname||"").trim()&&hero&&(hero.name||"").trim()
+     &&hero.name.trim()!==(P.meta.client||"").replace(/\s*様$/,"").trim()){
+    P.meta.nickname=hero.name.trim();done.push("呼ばれ方");
+  }
+  // 会社名
+  if(!(P.meta.company||"").trim()){
+    const v=answerBy(["会社名","屋号","会社名・事業内容"]);
+    if(v){P.meta.company=firstLine(v,40);done.push("会社名");}
+  }
+  // 読者
+  if(!(P.meta.target||"").trim()){
+    const v=answerBy(["どんな人がお客様","どんな人に来て","フォロワー","読者","見てほしい"]);
+    if(v){P.meta.target=firstLine(v,60);done.push("読者");}
+  }
+  // 読後の行動
+  if(!(P.meta.cta||"").trim()){
+    const v=answerBy(["してほしい行動","最初の一歩","どう動いて","応募方法","問い合わせ"]);
+    if(v){P.meta.cta=firstLine(v,60);done.push("読後の行動");}
+  }
+  // 作品タイトル
+  if(!(P.meta.title||"").trim()){
+    if(P.plan.structure==="custom"&&(P.plan.customTitle||"").trim()){
+      P.meta.title=P.plan.customTitle.trim();done.push("作品タイトル");
+    }else if((P.meta.company||"").trim()){
+      P.meta.title=P.meta.company.trim()+"のマンガ";done.push("作品タイトル");
+    }
+  }
+  // 主人公の名前（逆方向：案件名→登場人物）
+  if(hero&&!(hero.name||"").trim()){
+    const nm=(P.meta.nickname||P.meta.client||"").replace(/\s*様$/,"").trim();
+    if(nm){hero.name=nm;done.push("主人公の名前");}
+  }
+  if(done.length)save();
+  return [...new Set(done)];
+}
 /* 読み取った内容を STEP1 の案件情報に反映（空の項目だけ） */
 function applyProfileToMeta(){
   const pf=P.hearing.profile||{},done=[];
@@ -2064,7 +2144,7 @@ function renderProfile(){
   });
 }
 function pushProfileToMeta(){
-  const done=applyProfileToMeta();
+  const done=autoFillMeta();
   save();bindMeta();renderNow();
   alert(done.length?("反映しました："+done.join("・")+"\n\n※ すでに入力済みの項目は上書きしていません。")
     :"反映できる空の項目がありませんでした。\n（すでにSTEP1に入力済みです）");
@@ -2180,7 +2260,7 @@ function applyAnswersText(t,quiet){
     if(/^\uff08?\u4e0d\u660e\uff09?$/.test(v))return;
     P.hearing.profile[x[0]]=v;pn++;
   });
-  const filledMeta=applyProfileToMeta();
+  const filledMeta=autoFillMeta();
   save();renderQuestions();
   if(typeof renderProfile==="function")renderProfile();
   if(filledMeta.length){bindMeta();renderNow();}
@@ -2311,7 +2391,7 @@ function renderProposals(){
       const i=+el.dataset.prop,x=P.plan.proposals[i];
       P.plan.structure="custom";P.plan.pickedProposal=i;
       P.plan.customTitle=x.title;P.plan.customBeats=x.beats.slice();
-      save();renderProposals();renderPatterns();renderNav();
+      save();autoFillMeta();bindMeta();renderNow();renderProposals();renderPatterns();renderNav();
       if(P.pages.length&&confirm("この構成を各ページのあらすじに割り振りますか？"))applyStructure();
       toast("「"+x.title+"」を選びました");
     };
