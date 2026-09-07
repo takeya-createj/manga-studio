@@ -5271,10 +5271,44 @@ async function drawPagePrompt(i){
   t+="・2枚目以降は登場人物の参照。顔・髪型・服装を完全に一致させること\n";
   t+="・テンプレ画像の番号や線そのものは描かない。コマ枠はマンガとして自然に描く\n";
   t+="・出力は1024x1536の縦長、ページ全体を1枚で描くこと\n";
+
+  const texts=[];
+  (p.panels||[]).forEach((d,j)=>{
+    if(d.narration&&d.narration.trim())texts.push(`${MARU[j+1]} ナレーション：「${breakCommas(d.narration).replace(/\n/g," ")}」`);
+    (d.lines||[]).forEach(l=>{
+      if(l.text&&l.text.trim())
+        texts.push(`${MARU[j+1]} ${charEn(l.charId)}：「${breakCommas(l.text.replace(/^\u300c|\u300d$/g,"")).replace(/\n/g," ")}」`);
+    });
+  });
+  if(texts.length){
+    t+="\n■ このページに描く文字は下記がすべて（MANDATORY）\n";
+    texts.forEach(x=>t+=x+"\n");
+    t+="・上記の文字を 一字一句そのまま 描くこと。単語や文節を繰り返さない。途中で切らない\n";
+    t+="・上記にない文字・看板・ロゴ・英単語を一切描かない\n";
+    t+="・文字は吹き出しの中に収め、はみ出させない。入らないなら吹き出しを大きくする\n";
+    t+="・漢字・ひらがなの形を崩さない。読めない文字を描かない\n";
+  }
+  const fixes=[];
+  (p.panels||[]).forEach((d,j)=>(d.fixes||[]).forEach(f=>{if(!f.done)fixes.push(`${MARU[j+1]} ${f.text}`);}));
+  if(fixes.length){
+    t+="\n■ 前回からの直し（必ず反映）\n";
+    fixes.forEach(x=>t+="・"+x+"\n");
+    t+="※ 上記以外は前回と同じにすること。人物の顔・服装・コマ割りは変えない\n";
+  }
   return t;
 }
 async function drawOnePage(i,key,model){
-  const content=[{type:"text",text:await drawPagePrompt(i)}];
+  let ptxt=await drawPagePrompt(i);
+  if(window.__textMode){
+    ptxt+="\n\n■ 最優先の指示：文字\n";
+    ptxt+="前回の絵では文字が崩れていました。\n";
+    ptxt+="・上の「このページに描く文字」を一字一句そのまま描くこと\n";
+    ptxt+="・同じ単語を二度描かない（例：「南房総の房総の」のような重複は絶対に不可）\n";
+    ptxt+="・文字数が入りきらないときは、吹き出しを大きくして対応すること\n";
+    ptxt+="・文字は大きく・はっきりと。小さくして詰め込まない\n";
+    ptxt+="・絵の内容・構図・人物は前回と同じにすること\n";
+  }
+  const content=[{type:"text",text:ptxt}];
   const tpl=drawTemplate(P.pages[i].tpl,1024,1536).toDataURL("image/png");
   content.push({type:"image_url",image_url:{url:tpl}});
   P.characters.forEach(c=>{
@@ -5346,9 +5380,13 @@ function drawRest(){
   if(!confirm(`まだ描けていない ${list.length}ページ を描きます。\n目安：約${list.length*YEN_PER_PAGE}円\n\n進めてよろしいですか？`))return;
   drawPages(list);
 }
-function drawOne(i){
-  if(!confirm(`${i+1}ページ目を${P.pages[i].img?"描き直し":"描き"}ます。\n目安：約${YEN_PER_PAGE}円\n\nよろしいですか？`))return;
-  drawPages([i]);
+function drawOne(i,textMode){
+  const msg=textMode
+    ?`${i+1}ページ目を、文字を強く指定して描き直します。\n文字化け・重複・余分な文字が出たときに使います。\n目安：約${YEN_PER_PAGE}円\n\nよろしいですか？`
+    :`${i+1}ページ目を${P.pages[i].img?"描き直し":"描き"}ます。\n目安：約${YEN_PER_PAGE}円\n\nよろしいですか？`;
+  if(!confirm(msg))return;
+  window.__textMode=!!textMode;
+  drawPages([i]).then(()=>{window.__textMode=false;});
 }
 function renderDrawBox(keepStatus){
   const box=document.getElementById("drawBox");if(!box)return;
@@ -5373,6 +5411,7 @@ function renderDrawBox(keepStatus){
         <div class="pn">${i+1}. ${esc((p.title||"").slice(0,12))||"（無題）"}</div>
         <div class="pa">
           <button class="btn sm" onclick="drawOne(${i})">${p.img?"作り直す":"作る"}</button>
+          ${p.img?`<button class="btn sm" onclick="drawOne(${i},true)">文字を直す</button>`:""}
           ${p.img?`<button class="btn sm" onclick="showPageImage(${i})">大きく</button>`:""}
         </div>
       </div>
