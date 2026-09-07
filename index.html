@@ -688,6 +688,7 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
       </div>
     </aside>
     <div>
+      <div class="card" style="margin-bottom:16px" id="autoBox"></div>
       <div class="card" style="margin-bottom:16px" id="pageEditor"></div>
       <div class="card">
         <h2>コマ割りへのご意見・修正のやり取り<span id="lyCount"></span></h2>
@@ -4177,11 +4178,180 @@ function movePage(i,dir){
   const j=i+dir;if(j<0||j>=P.pages.length)return;
   [P.pages[i],P.pages[j]]=[P.pages[j],P.pages[i]];curPage=j;save();renderPages();renderStruct();
 }
+/* 演出の意図と起承転結から、コマ割りを自動で決める */
+const TPL_POOL={
+  "起":[8,5,6,11,3],
+  "承":[8,11,7,3,5],
+  "転":[9,4,10,1,6],
+  "結":[6,2,5,8,4],
+  "—":[8,5,6,11,7]
+};
+function autoLayoutAll(){
+  if(!P.pages.length)return 0;
+  let fullUsed=0,changed=0;
+  P.pages.forEach((p,i)=>{
+    const it=INTENTS.find(x=>x.k===p.intent);
+    let cand=it?it.tpl.slice():[];
+    cand=cand.concat(TPL_POOL[p.act]||TPL_POOL["—"]);
+    const prev=i>0?P.pages[i-1].tpl:0, prev2=i>1?P.pages[i-2].tpl:0;
+    let pick=0;
+    for(const n of cand){
+      if(n===1&&fullUsed>=2)continue;
+      if(n===prev||n===prev2)continue;
+      pick=n;break;
+    }
+    if(!pick)pick=cand.find(n=>n!==prev)||8;
+    if(pick===1)fullUsed++;
+    if(p.tpl!==pick){
+      const nt=TEMPLATES[pick];
+      p.tpl=pick;p.auto=false;
+      while(p.panels.length<nt.count)p.panels.push(newPanel());
+      p.panels.length=nt.count;
+      changed++;
+    }else p.auto=false;
+  });
+  save();
+  return changed;
+}
+function buildPanelsPrompt(from,to){
+  let q=`あなたはプロのマンガ原作者です。下のシナリオから、各ページのコマの中身を作ってください。\n\n`;
+  q+=`■ 作品の前提\n`;
+  if(P.meta.title)q+=`タイトル：${P.meta.title}\n`;
+  q+=`目的：${ucLabels()||"—"}　読者：${P.meta.target||"—"}\n`;
+  if(P.scenario.message)q+=`伝えたいこと：${P.scenario.message}\n`;
+  if(P.meta.cta)q+=`読後の行動：${P.meta.cta}\n`;
+  q+=`\n■ 登場人物\n`;
+  P.characters.forEach(c=>{
+    q+=`・${c.name||"名前未設定"}${c.role?"（"+c.role+"）":""}\n`;
+    (c.calls||[]).forEach(x=>{if(x.by&&x.name)q+=`　呼び方：${x.by}は「${x.name}」と呼ぶ\n`;});
+  });
+  if(!P.characters.length)q+=`（未登録）\n`;
+  q+=`\n■ 作るページ\n`;
+  for(let i=from;i<=to;i++){
+    const p=P.pages[i],t=TEMPLATES[p.tpl];
+    q+=`P${i+1}（${t.count}コマ）${p.title?"："+p.title:""}\n　内容：${p.summary||"（未記入）"}\n`;
+    t.panels.forEach((pn,j)=>{q+=`　コマ${j+1}：${pn.pos}\n`;});
+  }
+  q+=`\n■ 出力の形式（この形式以外は書かない）\n`;
+  q+=`[P1]\n1N ナレーション（不要なら行ごと省く）\n`;
+  q+=`1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n`;
+  q+=`2N …（コマ番号を変えて同じ形式）\n[P2]\n…\n`;
+  q+=`\n■ 背景IDの選び方\n`;
+  BG_E.slice(0,20).forEach(x=>{q+=`${x[0]}=${x[1]}\n`;});
+  BG_S.slice(0,20).forEach(x=>{q+=`${x[0]}=${x[1]}\n`;});
+  q+=`\n■ 守ること\n`;
+  q+=`・セリフは1つの吹き出しにつき30字以内。読点「、」は使わない\n`;
+  q+=`・1ページの吹き出しは4〜6個。全コマにセリフを入れなくてよい\n`;
+  q+=`・話者名は上の登場人物の名前をそのまま使う\n`;
+  q+=`・オノマトペは驚き・衝撃・動きのあるコマにだけ1つだけ\n`;
+  q+=`・同じシーンが続く間は同じ状況背景IDを使う\n`;
+  q+=`・シナリオにない事実を作らない\n`;
+  q+=`・最終ページには読者への呼びかけを入れる\n`;
+  return q;
+}
+function applyPanelsText(txt){
+  const lines=String(txt||"").replace(/\r/g,"").split("\n");
+  let pi=-1,filled=0;
+  const nameToId={};
+  P.characters.forEach(c=>{if(c.name)nameToId[c.name.trim()]=c.id;});
+  lines.forEach(ln=>{
+    const mp=ln.match(/^\s*\[?P\s*([0-9]{1,2})\]?\s*$/);
+    if(mp){pi=+mp[1]-1;return;}
+    if(pi<0||!P.pages[pi])return;
+    const m=ln.match(/^\s*([0-9])\s*([NSEGO])\s+(.*)$/);
+    if(!m)return;
+    const j=+m[1]-1,f=m[2],v=m[3].trim();
+    const d=P.pages[pi].panels[j];
+    if(!d)return;
+    if(f==="N"){d.narration=v;filled++;}
+    else if(f==="S"){
+      const parts=v.split(/[|\uff5c]/);
+      const nm=(parts[0]||"").trim();
+      const tx=(parts.slice(1).join("|")||"").trim().replace(/^\u300c|\u300d$/g,"");
+      if(tx){
+        d.lines=d.lines||[];
+        d.lines.push({charId:nameToId[nm]||"__other",kind:"normal",text:tx});
+        if(nameToId[nm]){d.cast=d.cast||[];if(d.cast.indexOf(nameToId[nm])<0)d.cast.push(nameToId[nm]);}
+        filled++;
+      }
+    }
+    else if(f==="E"){d.bg=v;filled++;}
+    else if(f==="G"){if(/^[ES][0-9]{2}$/.test(v))d.bgType=v;}
+    else if(f==="O"){d.ono=v;}
+  });
+  save();
+  return filled;
+}
+function renderAutoBox(){
+  const box=document.getElementById("autoBox");if(!box)return;
+  const k=orKey();
+  const withSummary=P.pages.filter(x=>(x.summary||"").trim()).length;
+  const filled=P.pages.filter(p=>(p.panels||[]).some(d=>d.bg||d.narration||(d.lines||[]).length)).length;
+  box.innerHTML=`<h2>おまかせで一気に作る<span class="hint">無償・サンプルのときはこれだけで進められます</span></h2>
+  <p class="lead">コマ割りと、各コマのセリフ・絵の内容・背景・オノマトペを、シナリオからまとめて作ります。できたあとは普通に直せます。</p>
+  <div class="note ${withSummary?(k?"ok":""):""}" style="line-height:2">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn primary" id="autoAllBtn" ${withSummary&&k?"":"disabled"}>全${P.pages.length}ページをおまかせで作る</button>
+      <button class="btn" id="autoTplBtn" ${P.pages.length?"":"disabled"}>コマ割りだけ自動で決める（無料）</button>
+      <span style="font-size:12.5px" id="autoStatus">${
+        !P.pages.length?"先にSTEP1でページを作ってください。"
+        :(!withSummary?"先にSTEP4でページごとのあらすじを埋めてください。"
+        :(!k?"AIキーを設定すると使えます。":`目安の費用：約${Math.max(5,P.pages.length*2)}円　時間：${Math.ceil(P.pages.length/6)*30}秒ほど`))}</span>
+    </div>
+    ${filled?`<div style="font-size:11.5px;color:var(--warn);margin-top:6px">※ すでに ${filled}ページ に中身があります。上書きされます。</div>`:""}
+    <div style="font-size:11px;color:var(--ink-3);margin-top:5px">コマ割りは「同じ形を連続させない」「山場は大コマ」のルールで自動選択します。</div>
+  </div>`;
+  const b=document.getElementById("autoAllBtn");
+  if(b)b.onclick=autoAll;
+  const b2=document.getElementById("autoTplBtn");
+  if(b2)b2.onclick=()=>{
+    if(!confirm("全ページのコマ割りを自動で決め直します。\nコマ数が変わるページでは、はみ出したコマの内容が消えます。\n\nよろしいですか？"))return;
+    const n=autoLayoutAll();renderPages();renderAutoBox();
+    toast(n+"ページのコマ割りを決めました");
+  };
+}
+async function autoAll(){
+  const key=orKey();
+  if(!key){alert("先にAIキーを設定してください。");return;}
+  const n=P.pages.length;
+  if(!confirm(`全${n}ページのコマ割りと中身をまとめて作ります。\n目安の費用：約${Math.max(5,n*2)}円\n\n今入っているコマの内容は上書きされます。よろしいですか？`))return;
+  const b=document.getElementById("autoAllBtn"),st=document.getElementById("autoStatus");
+  if(b)b.disabled=true;
+  if(st)st.textContent="コマ割りを決めています…";
+  autoLayoutAll();
+  P.pages.forEach(p=>p.panels.forEach(d=>{d.lines=[];d.narration="";d.bg="";d.bgType="";d.ono="";d.cast=[];}));
+  let ok=0;
+  const CH=6;
+  for(let from=0;from<n;from+=CH){
+    const to=Math.min(n-1,from+CH-1);
+    if(st)st.textContent=`中身を作成中… P${from+1}〜P${to+1}`;
+    try{
+      const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
+        headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
+        body:JSON.stringify({model:SCENARIO_MODEL,messages:[{role:"user",content:buildPanelsPrompt(from,to)}]})});
+      if(!r.ok)throw new Error("通信エラー "+r.status);
+      const j=await r.json();
+      addCost("コマ内容",(j.usage||{}).cost);
+      const txt=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
+      ok+=applyPanelsText(txt);
+    }catch(e){
+      if(st)st.textContent="";
+      alert("途中で止まりました。\n"+(e&&e.message||e)+"\n\nここまでの分は保存されています。");
+      break;
+    }
+  }
+  renderPages();renderAutoBox();
+  const st2=document.getElementById("autoStatus");
+  if(st2)st2.textContent=`できました。左のページ一覧から確認して、気になるところを直してください。`;
+  if(b)b.disabled=false;
+  toast("おまかせで作成しました");
+}
 function renderPages(){
   const rail=document.getElementById("pageList");if(!rail)return;
   if(!P.pages.length){
     rail.innerHTML='<div style="font-size:12px;color:var(--ink-3)">ページがありません</div>';
     document.getElementById("pageEditor").innerHTML='<div class="empty">STEP1でページ数を決めて「ページを作る」を押してください。</div>';
+    renderAutoBox();
     renderApprove("layout","apLayout","コマ割り");return;
   }
   rail.innerHTML="";
@@ -4197,7 +4367,7 @@ function renderPages(){
     d.onclick=()=>{curPage=i;renderPages();};
     rail.appendChild(d);
   });
-  renderEditor();syncSelectors();renderApprove("layout","apLayout","コマ割り");
+  renderEditor();syncSelectors();renderAutoBox();renderApprove("layout","apLayout","コマ割り");
 }
 function renderEditor(){
   const box=document.getElementById("pageEditor");
