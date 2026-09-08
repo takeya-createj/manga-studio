@@ -5657,7 +5657,7 @@ function rectMean(I,GW,GH,x0,y0,x1,y1){
   return (I[e*(GW+1)+c]-I[b*(GW+1)+c]-I[e*(GW+1)+a]+I[b*(GW+1)+a])/((c-a)*(e-b));
 }
 function analyzePage(srcCanvas,W,H){
-  const GW=Math.min(200,W),sc=GW/W,GH=Math.max(1,Math.round(H*sc));
+  const GW=Math.min(260,W),sc=GW/W,GH=Math.max(1,Math.round(H*sc));
   const cv=document.createElement("canvas");cv.width=GW;cv.height=GH;
   const g=cv.getContext("2d",{willReadFrequently:true});
   g.drawImage(srcCanvas,0,0,GW,GH);
@@ -5670,13 +5670,36 @@ function analyzePage(srcCanvas,W,H){
     ink[k]=(mn<243)?1:0;      /* ほぼ真っ白なところだけを余白とみなす */
   }
 
-  /* 縁から塗りつぶして「コマの外」を求める */
-  const out=new Uint8Array(n),st=[];
+  /* ノイズを1マス分飛び越えられる余白判定（JPEGの汚れで余白が途切れるのを防ぐ） */
+  const gap=new Uint8Array(n);
+  for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
+    const k=y*GW+x;
+    if(!ink[k]){gap[k]=1;continue;}
+    let w=0,c=0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      const xx=x+dx,yy=y+dy;
+      if(xx<0||yy<0||xx>=GW||yy>=GH||(!dx&&!dy))continue;
+      c++;if(!ink[yy*GW+xx])w++;
+    }
+    if(c&&w/c>=0.72)gap[k]=1;
+  }
+  /* ほぼ全幅が余白の行・列は、確実にコマ間の余白 */
+  const seeds=[];
+  for(let y=0;y<GH;y++){
+    let w=0;for(let x=0;x<GW;x++)w+=gap[y*GW+x];
+    if(w/GW>=0.92)for(let x=0;x<GW;x++)if(gap[y*GW+x])seeds.push(y*GW+x);
+  }
+  for(let x=0;x<GW;x++){
+    let w=0;for(let y=0;y<GH;y++)w+=gap[y*GW+x];
+    if(w/GH>=0.92)for(let y=0;y<GH;y++)if(gap[y*GW+x])seeds.push(y*GW+x);
+  }
+  /* 縁と上の行・列から塗りつぶして「コマの外」を求める */
+  const out=new Uint8Array(n),st=seeds.slice();
   for(let x=0;x<GW;x++){st.push(x);st.push((GH-1)*GW+x);}
   for(let y=0;y<GH;y++){st.push(y*GW);st.push(y*GW+GW-1);}
   while(st.length){
     const k=st.pop();
-    if(out[k]||ink[k])continue;
+    if(out[k]||!gap[k])continue;
     out[k]=1;
     const x=k%GW,y=(k-x)/GW;
     if(x>0)st.push(k-1);
