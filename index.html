@@ -5720,8 +5720,8 @@ async function composeText(i){
     const boxShape=(pw,ph)=>f=>({bw:f.w+f.fs*pw,bh:f.h+f.fs*ph});
     /* 吹き出し：文字の四角を楾円の内側に入れ、痩せすぎないよう縦横比を制限 */
     const bubbleShape=(kd)=>f=>{
-      const k=kd==="shout"?1.30:1.42;          /* ≈√2。文字の角が外に出ない大きさ */
-      let bw=f.w*k+f.fs*1.15, bh=f.h*(k*0.92)+f.fs*1.05;
+      const k=kd==="shout"?1.22:1.32;          /* 丸みと文字の大きさの間を取る */
+      let bw=f.w*k+f.fs*0.60, bh=f.h*(k*0.94)+f.fs*0.55;
       const r=bh/bw;
       if(r>1.9)bw=bh/1.9;                       /* 縦長すぎを丸くする */
       if(r<0.62)bh=bw*0.62;                     /* 平たすぎも丸くする */
@@ -5767,7 +5767,7 @@ async function composeText(i){
     /* セリフ：右から左へ。顔や人物を避けて置く */
     const lines=(d.lines||[]).filter(l=>l&&l.text&&l.text.trim());
     if(lines.length){
-      const base=Math.min(U.h*0.085,U.w*0.075,38);
+      const base=Math.min(U.h*0.100,U.w*0.078,40);
       const build=sc=>lines.map(l=>{
         const kd=l.kind||"normal";
         const mag=kd==="shout"?1.16:(kd==="small"?0.82:1);
@@ -5780,7 +5780,7 @@ async function composeText(i){
         const it=build(sc);
         const total=it.reduce((a,x)=>a+x.bw,0)+Math.min(U.w,U.h)*0.035*(it.length-1);
         const tall=Math.max.apply(null,it.map(x=>x.bh));
-        if(total<=U.w&&tall<=U.h*0.62){items=it;break;}
+        if(total<=U.w&&tall<=U.h*0.86){items=it;break;}
       }
       if(!items)items=build(0.44);
 
