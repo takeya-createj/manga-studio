@@ -3897,7 +3897,7 @@ function pageText(pi){
     const d=p.panels[o.i]||{lines:[]};
     const bits=[];
     if(d.narration)bits.push(`［ナレーション］${d.narration}`);
-    (d.lines||[]).forEach(l=>{if(l.text)bits.push(`${charName(l.charId)||"？"}「${l.text.replace(/^「|」$/g,"")}」`);});
+    (d.lines||[]).forEach(l=>{if(l.text)bits.push(`${whoName(l)||"？"}「${l.text.replace(/^「|」$/g,"")}」`);});
     if(bits.length)s+=`${MARU[o.i+1]} ${bits.join("　")}\n`;
   });
   return s.trim();
@@ -4373,7 +4373,7 @@ function applyPanelsText(txt,replace){
       const tx=(parts.slice(1).join("|")||"").trim().replace(/^\u300c|\u300d$/g,"");
       if(tx){
         d.lines=d.lines||[];
-        d.lines.push({charId:nameToId[nm]||"__other",kind:"normal",text:tx});
+        d.lines.push({charId:nameToId[nm]||"__other",other:(nameToId[nm]?"":nm),kind:"normal",text:tx});
         if(nameToId[nm]){d.cast=d.cast||[];if(d.cast.indexOf(nameToId[nm])<0)d.cast.push(nameToId[nm]);}
         filled++;
       }
@@ -4436,7 +4436,7 @@ function renderReadAll(){
           <div class="pos">${pn.pos}　読む順 ${o.read}番目</div>
           ${d.narration?`<div class="chk narr"><div class="lab">ナレーション</div><div class="val">${esc(d.narration)}</div></div>`:""}
           ${(d.lines||[]).filter(l=>l.text).map(l=>`<div class="chk talk">
-            <div class="lab">セリフ　${esc(charName(l.charId)||"話者未設定")}</div>
+            <div class="lab">セリフ　${esc(whoName(l)||"話者未設定")}</div>
             <div class="val">「${esc(l.text)}」</div></div>`).join("")}
           <div class="chk ${d.bg?"art":"empty"}"><div class="lab">絵の内容</div>
             <div class="val">${esc(d.bg||"（未入力）")}</div></div>
@@ -4908,25 +4908,30 @@ function bubbleLines(pi,idx){
     const label=kind[2].replace("bubble",`bubble (${dir}${kind[0]==="small"?", small":""})`)
       .replace(" (small)","");
     const body=breakCommas(l.text.replace(/^\u300c|\u300d$/g,""));
-    out.push(`${charEn(l.charId)}'s ${label} — text reads: 「${body}」`);
+    out.push(`${whoEn(l)}'s ${label} — text reads: 「${body}」`);
   });
   return out;
 }
 function ownershipLine(pi,idx){
   const d=P.pages[pi].panels[idx]||{};
-  const cast=(d.cast||[]).slice();
-  const speakers=[...new Set((d.lines||[]).filter(l=>l.text&&l.text.trim()).map(l=>l.charId))];
-  const all=[...new Set(cast.concat(speakers))].filter(x=>x&&x!=="__other");
-  if(all.length<2)return "";
+  const said=(d.lines||[]).filter(l=>l.text&&l.text.trim());
+  const spk=[];
+  said.forEach(l=>{if(!spk.some(x=>whoKey(x)===whoKey(l)))spk.push(l);});
+  const silent=(d.cast||[]).filter(id=>id&&id!=="__other"&&!said.some(l=>l.charId===id));
+  if(spk.length+silent.length<2)return "";
   const parts=[];
-  speakers.filter(x=>x&&x!=="__other").forEach(id=>{
-    const first=(d.lines.find(l=>l.charId===id&&l.text)||{}).text||"";
-    const head=breakCommas(first).split("\n")[0].slice(0,14);
-    parts.push(`「${head}…」 is spoken by ${charEn(id)}${charMark(id)?` (${charMark(id)})`:""}. Its tail MUST point at ${charEn(id)}'s mouth and the bubble must sit on ${charEn(id)}'s side of the panel.`);
+  spk.forEach(l=>{
+    const head=breakCommas(l.text).split("\n")[0].slice(0,14);
+    const nm=whoEn(l),mk=(l.charId&&l.charId!=="__other")?charMark(l.charId):"";
+    parts.push(`「${head}…」 is spoken by ${nm}${mk?` (${mk})`:""}. Its tail MUST point at ${nm}'s mouth and the bubble must sit on ${nm}'s side of the panel.`);
   });
-  all.filter(id=>speakers.indexOf(id)<0).forEach(id=>{
+  silent.forEach(id=>{
     parts.push(`${charEn(id)}${charMark(id)?` (${charMark(id)})`:""} says NOTHING in this panel: draw no bubble and no tail pointing at this person.`);
   });
+  const others=spk.filter(l=>!l.charId||l.charId==="__other");
+  if(others.length&&P.characters.length){
+    parts.push(`${others.map(l=>whoEn(l)).join("・")} は登場人物表にいない別人です。${P.characters.map(c=>charEn(c.id)).join("・")} とは顔・年齢・髪型・服装を別にし、参照写真に似せないこと。`);
+  }
   return parts.length?("IMPORTANT — BUBBLE OWNERSHIP IN THIS PANEL: "+parts.join(" ")):"";
 }
 function panelBlock(pi,idx){
@@ -5182,6 +5187,23 @@ function syncSelectors(){
     if(keep&&s.querySelector(`option[value="${keep}"]`))s.value=keep;
   });
 }
+/* セリフの話者名（未登録の人は役割名をそのまま使う） */
+function whoName(l){
+  if(!l)return "";
+  if(l.charId&&l.charId!=="__other")return charName(l.charId);
+  return (l.other||"").trim()||"その他の人物";
+}
+function whoEn(l){
+  if(!l)return "PERSON";
+  if(l.charId&&l.charId!=="__other")return charEn(l.charId);
+  const t=(l.other||"").trim();
+  return t?`「${t}」`:"「その他の人物」";
+}
+function whoKey(l){
+  if(!l)return "";
+  if(l.charId&&l.charId!=="__other")return l.charId;
+  return "o:"+((l.other||"").trim()||"other");
+}
 function charName(id){
   if(id==="__other")return "その他";
   const c=P.characters.find(x=>x.id===id);return c?(c.name||"名前未設定"):"";
@@ -5189,7 +5211,7 @@ function charName(id){
 function panelData(p,idx){
   const d=p.panels[idx]||{narration:"",lines:[],bg:""};
   return{narration:d.narration||"",
-    names:d.lines.map(l=>charName(l.charId)).filter(Boolean).join("／"),
+    names:d.lines.map(l=>whoName(l)).filter(Boolean).join("／"),
     texts:d.lines.map(l=>l.text?`「${l.text.replace(/^「|」$/g,"")}」`:"").filter(Boolean).join("／"),
     bg:d.bg||""};
 }
@@ -5284,8 +5306,8 @@ function pagePrompt(pi){
     s+=`\n${MARU[o.i+1]}（${o.read}番目に読むコマ）${pn.pos}\n`;
     if(d.narration)s+=`　ナレーション：${d.narration}\n`;
     if(dd&&dd.lines.length){
-      dd.lines.forEach(l=>{if(l.text)s+=`　セリフ（${charName(l.charId)||"話者未設定"}）：「${l.text.replace(/^「|」$/g,"")}」\n`;});
-      const uniq=[...new Set(dd.lines.map(l=>charName(l.charId)).filter(n=>n&&n!=="その他"))];
+      dd.lines.forEach(l=>{if(l.text)s+=`　セリフ（${whoName(l)||"話者未設定"}）：「${l.text.replace(/^「|」$/g,"")}」\n`;});
+      const uniq=[...new Set(dd.lines.map(l=>whoName(l)).filter(n=>n&&n!=="その他"))];
       if(uniq.length===1)s+=`　※このコマに登場するのは${uniq[0]}のみ。\n`;
     }
     let bg=d.bg;
@@ -5349,7 +5371,7 @@ async function drawPagePrompt(i){
   let t=harnessPagePrompt(i);
   t+="\n\n■ 添付画像の使い方\n";
   t+="・1枚目はコマ割りの型。この枠の位置と大きさのとおりにコマを配置すること。枠内の番号はコマ番号を表す\n";
-  t+="・2枚目以降は登場人物の参照。顔・髪型・服装を完全に一致させること\n";
+  t+="・2枚目以降は登場人物の参照。どの画像が誰かは下の「添付画像は誰のものか」に従うこと\n";
   t+="・テンプレ画像の番号や線そのものは描かない。コマ枠はマンガとして自然に描く\n";
   const sz=outSize();
   t+=`・仕上がりは ${sz.tool} 向け。必ず ${sz.w}x${sz.h}px（${sz.label}）の比率で描くこと\n`;
@@ -5361,7 +5383,7 @@ async function drawPagePrompt(i){
     if(d.narration&&d.narration.trim())texts.push(`${MARU[j+1]} ナレーション：「${breakCommas(d.narration).replace(/\n/g," ")}」`);
     (d.lines||[]).forEach(l=>{
       if(l.text&&l.text.trim())
-        texts.push(`${MARU[j+1]} ${charEn(l.charId)}：「${breakCommas(l.text.replace(/^\u300c|\u300d$/g,"")).replace(/\n/g," ")}」`);
+        texts.push(`${MARU[j+1]} ${whoEn(l)}：「${breakCommas(l.text.replace(/^\u300c|\u300d$/g,"")).replace(/\n/g," ")}」`);
     });
   });
   if(textOn()){
@@ -5403,13 +5425,26 @@ async function drawOnePage(i,key,model){
     ptxt+="・文字は大きく・はっきりと。小さくして詰め込まない\n";
     ptxt+="・絵の内容・構図・人物は前回と同じにすること\n";
   }
-  const content=[{type:"text",text:ptxt}];
   const tpl=drawTemplate(P.pages[i].tpl,outSize().w,outSize().h).toDataURL("image/png");
-  content.push({type:"image_url",image_url:{url:tpl}});
+  const refs=[];
   P.characters.forEach(c=>{
     const ref=c.ref||(c.images||[])[0];
-    if(ref)content.push({type:"image_url",image_url:{url:ref}});
+    if(ref)refs.push({c,ref});
   });
+  if(refs.length){
+    ptxt+="\n\n■ 添付画像は誰のものか（MANDATORY）\n";
+    ptxt+="1枚目 = コマ割りの型（人物ではない）\n";
+    refs.forEach((r,k)=>{
+      const look=[r.c.role,r.c.hair,r.c.outfit,r.c.feature,r.c.mark].filter(Boolean).join("／");
+      ptxt+=`${k+2}枚目 = ${charEn(r.c.id)}（${r.c.name||"名前未設定"}）の顔の参照${look?"："+look:""}\n`;
+    });
+    ptxt+="・上記の対応を取り違えないこと。別の人に顔を付け替えない\n";
+    ptxt+=`・参照画像がない人物（${refs.map(r=>charEn(r.c.id)).join("・")}以外の全員）は、上の参照写真とは別人として描くこと。顔・年齢・髪型・服装をはっきり変える\n`;
+    ptxt+="・登場人物は全ページで同じ顔・同じ服装にすること\n";
+  }
+  const content=[{type:"text",text:ptxt}];
+  content.push({type:"image_url",image_url:{url:tpl}});
+  refs.forEach(r=>content.push({type:"image_url",image_url:{url:r.ref}}));
   const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
     headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
     body:JSON.stringify({model:model,modalities:["image","text"],messages:[{role:"user",content:content}]})});
@@ -5985,7 +6020,7 @@ function pageAsText(i){
     const d=(p.panels||[])[j]||{};
     q+=`コマ${j+1}（${pn.pos}）\n`;
     if(d.narration)q+=`${j+1}N ${d.narration}\n`;
-    (d.lines||[]).forEach(l=>{if(l.text)q+=`${j+1}S ${charName(l.charId)||"？"}|${l.text}\n`;});
+    (d.lines||[]).forEach(l=>{if(l.text)q+=`${j+1}S ${whoName(l)||"？"}|${l.text}\n`;});
     if(d.bg)q+=`${j+1}E ${d.bg}\n`;
     if(d.bgType)q+=`${j+1}G ${d.bgType}\n`;
     if(d.ono)q+=`${j+1}O ${d.ono}\n`;
