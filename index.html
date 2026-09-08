@@ -5725,16 +5725,16 @@ function buildDetail(ctx,X,Y,PW,PH){
 function placeBox(dm,bw,bh,idealCx,idealCy,taken,U,opt){
   opt=opt||{};
   const spanX=Math.max(0,U.w-bw),spanY=Math.max(0,U.h-bh);
-  const nx=spanX>1?18:0,ny=spanY>1?18:0;
+  const nx=spanX>1?24:0,ny=spanY>1?24:0;
   let best=null,bestFree=null;
   for(let sy=0;sy<=ny;sy++)for(let sx=0;sx<=nx;sx++){
     const cx=U.x+bw/2+(nx?spanX*sx/nx:spanX/2);
     const cy=U.y+bh/2+(ny?spanY*sy/ny:spanY/2);
-    let sc=(dm?dm.rect(cx-bw/2-dm.X,cy-bh/2-dm.Y,cx+bw/2-dm.X,cy+bh/2-dm.Y):0)*4.4;
+    let sc=(dm?dm.rect(cx-bw/2-dm.X,cy-bh/2-dm.Y,cx+bw/2-dm.X,cy+bh/2-dm.Y):0)*7.5;
     const dx=(cx-idealCx)/Math.max(1,U.w),dy=(cy-idealCy)/Math.max(1,U.h);
-    sc+=Math.sqrt(dx*dx+dy*dy)*0.85;
-    if(opt.top)sc+=((cy-U.y)/Math.max(1,U.h))*0.55;
-    if(opt.bottom)sc+=(1-(cy-U.y)/Math.max(1,U.h))*0.55;
+    sc+=Math.sqrt(dx*dx+dy*dy)*0.62;
+    if(opt.top)sc+=((cy-U.y)/Math.max(1,U.h))*0.40;
+    if(opt.bottom)sc+=(1-(cy-U.y)/Math.max(1,U.h))*0.40;
     let ov=0;
     for(const t of taken){
       const ox=Math.min(cx+bw/2,t.x1)-Math.max(cx-bw/2,t.x0);
