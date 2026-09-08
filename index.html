@@ -6198,6 +6198,26 @@ function renderChat(toBottom){
   const w=document.getElementById("chatWrap");
   if(w&&toBottom)w.scrollTop=w.scrollHeight;
 }
+/* このページでAIに送っている指示をそのまま見せる */
+async function showPagePrompt(i){
+  const p=P.pages[i];if(!p)return;
+  let t="";
+  try{t=await drawPagePrompt(i);}catch(e){t="指示を作れませんでした。\n"+(e&&e.message||e);}
+  const refs=P.characters.filter(c=>c.ref||(c.images||[])[0]);
+  let head=`【${i+1}ページ目でAIに送っている指示】\n`;
+  head+=`添付する画像：1枚目=コマ割りの型`;
+  refs.forEach((c,k)=>{head+=`、${k+2}枚目=${c.name||"名前未設定"}の写真`;});
+  head+=`\n登場人物表：`+(P.characters.length?P.characters.map(c=>c.name||"名前未設定").join("・"):"（未登録）");
+  const others=[];
+  (p.panels||[]).forEach((d,j)=>(d.lines||[]).forEach(l=>{
+    if((!l.charId||l.charId==="__other"))others.push(`${MARU[j+1]} ${(l.other||"").trim()||"（名前なし）"}`);
+  }));
+  if(others.length)head+=`\n登録されていない話者：`+others.join("、");
+  previewText=head+"\n\n"+t;
+  document.getElementById("previewTitle").textContent=`${i+1}ページ目のAIへの指示`;
+  const pb=document.getElementById("previewBody");pb.innerHTML="";pb.textContent=previewText;
+  document.getElementById("previewOverlay").classList.add("on");
+}
 function stopDraw(){
   window.__stopDraw=true;
   const el=document.getElementById("drawStatus");
@@ -6243,6 +6263,7 @@ function renderDrawBox(keepStatus){
         <div class="pa">
           <button class="btn sm" onclick="drawOne(${i})">${p.img?"作り直す":"作る"}</button>
           <button class="btn sm" onclick="setFixPage(${i})">直しを伝える</button>
+          <button class="btn sm" onclick="showPagePrompt(${i})">指示を見る</button>
           ${p.art?`<button class="btn sm" onclick="recomposeOne(${i})">文字を入れ直す</button>`
             :(p.img?`<button class="btn sm" onclick="drawOne(${i},true)">文字を直す</button>`:"")}
           ${p.img?`<button class="btn sm" onclick="showPageImage(${i})">大きく</button>`:""}
