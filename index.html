@@ -4928,6 +4928,8 @@ function panelBlock(pi,idx){
 function harnessPagePrompt(pi){
   const p=P.pages[pi],t=TEMPLATES[p.tpl];
   const head=[];
+  head.push(commonBlock(textOn()));
+  head.push("────────────────────");
   head.push(`JAPANESE MANGA. Reading direction: right-to-left. Panel 1 is at ${t.p1}. Never use left-to-right Western reading order.`);
   head.push("");
   head.push(`Layout: テンプレ${p.tpl}（${t.name}）`);
@@ -4939,10 +4941,11 @@ function harnessPagePrompt(pi){
   const ar=P.plan.artstyle?ARTSTYLES[P.plan.artstyle]:null;
   if(ar&&ar.prompt)head.push(`Art style: ${ar.title} — ${ar.prompt}`);
   if(P.plan.tone)head.push(`Art style (extra): ${P.plan.tone}`);
-  head.push("Full color. 1024x1536 vertical page.");
+  {const sz=outSize();head.push(`Full color. ${sz.w}x${sz.h} page (${sz.label}).`);}
   P.characters.forEach(c=>{
-    if(!c.file||!c.file.trim())return;
-    head.push(`${charEn(c.id)} = 添付「${c.file.trim()}」と完全一致`);
+    const look=[c.role,c.hair,c.outfit,c.feature,c.mark].filter(Boolean).join("／");
+    if(c.file&&c.file.trim())head.push(`${charEn(c.id)} = 添付「${c.file.trim()}」と完全一致${look?"（"+look+"）":""}`);
+    else if(look)head.push(`${charEn(c.id)} = ${look}（全ページで同じ顔・髪型・服装にすること）`);
   });
   const body=[];
   t.panels.map((x,i)=>({i,read:x.read})).sort((a,b)=>a.read-b.read)
@@ -4955,16 +4958,14 @@ function harnessPagePrompt(pi){
     if(isChapterFirst(pi)&&ch>1)
       tail.push(`このページは第${ch}章の最初のページ。最初のコマで前の章の終わりの問いを受けること。`);
   }
-  tail.push(...[
+  tail.push(...dropTexty([
     "Speech bubbles: Japanese-only bubbles are VERTICAL (top-to-bottom, right-to-left). Any bubble that contains even one English/Latin word must be rendered ENTIRELY HORIZONTAL (left-to-right, upright). Do NOT mix vertical Japanese with inline horizontal Latin in the same bubble.",
     "吹き出し・ナレーションの中に読点「、」を書かない。キリの良いところで改行する。1吹き出しは最大4行。",
     "文字サイズ：1024x1536 の紙面でセリフは1文字の高さ30px以上、ナレーションは26px以上。文字を小さくして詰め込まず、吹き出しを大きくする。",
     "基本書体は全ページ統一（明瞭な丸ゴシック系）。吹き出し間・ページ間で書体を切り替えない。",
     "All on-screen / terminal / sign text must be in Japanese. No English UI labels.",
     "コマ間に矢印（→）を絵として描かない。"
-  ]);
-  const or=ruleLines(P.rules.once);
-  if(or.length)tail.push("この作品だけのルール："+or.join(" / "));
+  ]));
   return head.join("\n")+"\n\n"+body.join("\n\n")+"\n\n"+tail.join("\n");
 }
 /* 画像を指定形式に変換 */
@@ -5182,6 +5183,8 @@ function buildCsvPage(pi){
   TEMPLATES[p.tpl].panels.forEach((pn,i)=>{const d=panelData(p,i);rows.push([i+1,d.narration,d.names,d.texts,d.bg]);});
   return "﻿"+rows.map(r=>r.map(csvCell).join(",")).join("\r\n");
 }
+const TEXTY=/(セリフ|吹き出し|ナレーション|文字|書体|読点|コマ番号|英語|bubble|Bubble|Speech|text|Text)/;
+function dropTexty(arr){return textOn()?arr.filter(x=>!TEXTY.test(x)):arr;}
 function commonBlock(){
   let s="【コマ0：全コマ共通指示】\n";
   if(P.meta.title)s+=`■ 作品タイトル：${P.meta.title}\n`;
@@ -5206,11 +5209,11 @@ function commonBlock(){
   if(pf.G)s+=`■ 実績：${pf.G}\n`;
   if(pf.H)s+=`■ お客様の声（セリフの材料）：${pf.H}\n`;
   if(pf.I)s+=`■ 問い合わせ先：${pf.I}\n`;
-  s+="\n▼ 必ず守るルール\n";
-  FIXED_RULES.forEach(r=>s+=`・${r}\n`);
-  const cr=ruleLines(COMMON_RULES);
-  if(cr.length){s+="\n▼ 共通ルール\n";cr.forEach(r=>s+=`・${r}\n`);}
-  const or=ruleLines(P.rules.once);
+  const fr=arguments[0]?dropTexty(FIXED_RULES):FIXED_RULES;
+  if(fr.length){s+="\n▼ 必ず守るルール\n";fr.forEach(r=>s+=`・${r}\n`);}
+  let cr=ruleLines(COMMON_RULES);if(arguments[0])cr=dropTexty(cr);
+  if(cr.length){s+="\n▼ 共通ルール（毎回守る）\n";cr.forEach(r=>s+=`・${r}\n`);}
+  let or=ruleLines(P.rules.once);if(arguments[0])or=dropTexty(or);
   if(or.length){s+="\n▼ この作品だけのルール（最優先で守ること）\n";or.forEach(r=>s+=`・${r}\n`);}
   if(P.meta.client){
     s+=`\n▼ 表記の指定\n・お名前は「${P.meta.client.replace(/\s*様$/,"")}」と表記すること。読み方から別の漢字に変換しないこと。`;
