@@ -5681,19 +5681,19 @@ function analyzePage(srcCanvas,W,H){
   if(mx>0)for(let k=0;k<n;k++)det[k]/=mx;
 
   /* 余白のマス：明るくて、むらがない */
-  const blank=new Uint8Array(n),dark=new Uint8Array(n);
-  for(let k=0;k<n;k++){
-    blank[k]=(L[k]>=234&&det[k]<0.10)?1:0;
-    dark[k]=(L[k]<130)?1:0;
-  }
+  const blank=new Uint8Array(n);
+  for(let k=0;k<n;k++)blank[k]=(L[k]>=232&&det[k]<0.12)?1:0;
   const rate=(f,a,b)=>{let c=0;for(let k=a;k<b;k++)c+=f(k);return c/Math.max(1,b-a);};
   const blankRow=(y,x0,x1)=>rate(x=>blank[y*GW+x],x0,x1);
   const blankCol=(x,y0,y1)=>rate(y=>blank[y*GW+x],y0,y1);
-  const darkRow =(y,x0,x1)=>rate(x=>dark[y*GW+x],x0,x1);
-  const darkCol =(x,y0,y1)=>rate(y=>dark[y*GW+x],y0,y1);
+  /* その行・列の平均の明るさ（小さいほど暗い＝枠線がある） */
+  const lumRow=(y,x0,x1)=>rate(x=>L[y*GW+x],x0,x1);
+  const lumCol=(x,y0,y1)=>rate(y=>L[y*GW+x],y0,y1);
+  const darkRow=(y,x0,x1)=>255-lumRow(y,x0,x1);
+  const darkCol=(x,y0,y1)=>255-lumCol(x,y0,y1);
 
   const BL=0.90;              /* 帯とみなす余白率 */
-  const DK=0.30;              /* 両側に枠線があること */
+  const DK=42;                /* 両側が真っ白よりこれだけ暗いこと（枠線） */
   const minG=Math.max(2,Math.round(Math.min(GW,GH)*0.012));
 
   function findBands(a,b,isBlank,isDark){
