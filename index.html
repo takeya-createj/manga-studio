@@ -4338,14 +4338,20 @@ function buildPanelsPrompt(from,to){
   q+=`・最終ページには読者への呼びかけを入れる\n`;
   return q;
 }
+const ZEN2HAN=t=>String(t).replace(/[\uff10-\uff19]/g,d=>String.fromCharCode(d.charCodeAt(0)-0xFEE0));
+const MARU2NUM={"\u2460":"1","\u2461":"2","\u2462":"3","\u2463":"4","\u2464":"5","\u2465":"6","\u2466":"7","\u2467":"8","\u2468":"9","\u2469":"10"};
 function applyPanelsText(txt,replace){
-  const lines=String(txt||"").replace(/\r/g,"").split("\n");
+  const lines=ZEN2HAN(String(txt||"").replace(/\r/g,""))
+    .replace(/[\u2460-\u2469]/g,m=>MARU2NUM[m])
+    .split("\n")
+    .filter(x=>!/^\s*```/.test(x));
   let pi=-1,filled=0;
   const seen={};
   const nameToId={};
   P.characters.forEach(c=>{if(c.name)nameToId[c.name.trim()]=c.id;});
   lines.forEach(ln=>{
-    const mp=ln.match(/^\s*\[?P\s*([0-9]{1,2})\]?\s*$/);
+    /* 【P3】や「P3：見出し」のような書き方も受け取る */
+    const mp=ln.match(/^\s*[\[\u3010\uff3b]?\s*P\s*([0-9]{1,2})\s*[\]\u3011\uff3d]?\s*(?:[\s\u3000:\uff1a\-\u2014\u3001].*)?$/i);
     if(mp){
       pi=+mp[1]-1;
       if(replace&&P.pages[pi]&&!seen[pi]){
@@ -4355,9 +4361,9 @@ function applyPanelsText(txt,replace){
       return;
     }
     if(pi<0||!P.pages[pi])return;
-    const m=ln.match(/^\s*([0-9])\s*([NSEGO])\s+(.*)$/);
+    const m=ln.match(/^\s*(?:\u30b3\u30de)?\s*([0-9])\s*[\-\u2010\uff0d]?\s*([NSEGOnsego])\s*[\s\u3000:\uff1a]\s*(.*)$/);
     if(!m)return;
-    const j=+m[1]-1,f=m[2],v=m[3].trim();
+    const j=+m[1]-1,f=m[2].toUpperCase(),v=m[3].trim();
     const d=P.pages[pi].panels[j];
     if(!d)return;
     if(f==="N"){d.narration=v;filled++;}
@@ -5598,6 +5604,85 @@ function loadImg(src){
     const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("絵を読み込めません"));im.src=src;
   });
 }
+/* 絵から実際のコマ枠を見つける（コマ間の白い余白で切る） */
+function detectPanels(srcCanvas,W,H){
+  const SW=Math.min(420,W);
+  const sc=SW/W, SH=Math.max(1,Math.round(H*sc));
+  const cv=document.createElement("canvas");cv.width=SW;cv.height=SH;
+  const g=cv.getContext("2d",{willReadFrequently:true});
+  g.drawImage(srcCanvas,0,0,SW,SH);
+  let dd;
+  try{dd=g.getImageData(0,0,SW,SH).data;}catch(e){return null;}
+  const ink=new Uint8Array(SW*SH);
+  for(let y=0;y<SH;y++)for(let x=0;x<SW;x++){
+    const i=(y*SW+x)*4;
+    const L=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];
+    ink[y*SW+x]=L<232?1:0;
+  }
+  const EPS=0.012, minGut=Math.max(2,Math.round(Math.min(SW,SH)*0.010));
+  const inkRow=(y,x0,x1)=>{let c=0;for(let x=x0;x<x1;x++)c+=ink[y*SW+x];return c/Math.max(1,x1-x0);};
+  const inkCol=(x,y0,y1)=>{let c=0;for(let y=y0;y<y1;y++)c+=ink[y*SW+x];return c/Math.max(1,y1-y0);};
+  function bands(a,b,f){
+    const out=[];let st=-1;
+    for(let k=a;k<b;k++){
+      if(f(k)<=EPS){if(st<0)st=k;}
+      else{if(st>=0&&k-st>=minGut)out.push([st,k]);st=-1;}
+    }
+    if(st>=0&&b-st>=minGut)out.push([st,b]);
+    return out;
+  }
+  function trim(r){
+    let x0=r[0],y0=r[1],x1=r[2],y1=r[3];
+    while(y0<y1&&inkRow(y0,x0,x1)<=EPS)y0++;
+    while(y1>y0&&inkRow(y1-1,x0,x1)<=EPS)y1--;
+    while(x0<x1&&inkCol(x0,y0,y1)<=EPS)x0++;
+    while(x1>x0&&inkCol(x1-1,y0,y1)<=EPS)x1--;
+    return [x0,y0,x1,y1];
+  }
+  const out=[];
+  function split(r,depth){
+    r=trim(r);
+    const x0=r[0],y0=r[1],x1=r[2],y1=r[3];
+    if(x1-x0<SW*0.07||y1-y0<SH*0.05||depth>6){if(x1>x0&&y1>y0)out.push(r);return;}
+    let hb=bands(y0+1,y1-1,k=>inkRow(k,x0,x1)).filter(b=>b[0]>y0&&b[1]<y1);
+    if(hb.length){
+      let prev=y0;
+      hb.forEach(b=>{if(b[0]-prev>SH*0.04)split([x0,prev,x1,b[0]],depth+1);prev=b[1];});
+      if(y1-prev>SH*0.04)split([x0,prev,x1,y1],depth+1);
+      return;
+    }
+    let vb=bands(x0+1,x1-1,k=>inkCol(k,y0,y1)).filter(b=>b[0]>x0&&b[1]<x1);
+    if(vb.length){
+      let prev=x0;
+      vb.forEach(b=>{if(b[0]-prev>SW*0.05)split([prev,y0,b[0],y1],depth+1);prev=b[1];});
+      if(x1-prev>SW*0.05)split([prev,y0,x1,y1],depth+1);
+      return;
+    }
+    out.push(r);
+  }
+  split([0,0,SW,SH],0);
+  return out.map(r=>[r[0]/sc,r[1]/sc,r[2]/sc,r[3]/sc]);
+}
+/* 日本式の読み順（上から下、各段は右から左）に並べる */
+function orderPanels(rects){
+  const rs=rects.slice().sort((a,b)=>a[1]-b[1]);
+  const rows=[];
+  rs.forEach(r=>{
+    const h=r[3]-r[1];
+    let row=null;
+    for(const R of rows){
+      const ov=Math.min(R.y1,r[3])-Math.max(R.y0,r[1]);
+      if(ov>Math.min(h,R.y1-R.y0)*0.45){row=R;break;}
+    }
+    if(!row){row={y0:r[1],y1:r[3],items:[]};rows.push(row);}
+    row.y0=Math.min(row.y0,r[1]);row.y1=Math.max(row.y1,r[3]);
+    row.items.push(r);
+  });
+  rows.sort((a,b)=>a.y0-b.y0);
+  const o=[];
+  rows.forEach(R=>{R.items.sort((a,b)=>b[0]-a[0]);R.items.forEach(x=>o.push(x));});
+  return o;
+}
 /* 絵の「描き込み量」をマス目で測る（顔や人物は高、空や壁は低） */
 function buildDetail(ctx,X,Y,PW,PH){
   const gx=26,gy=Math.max(8,Math.min(44,Math.round(26*PH/Math.max(1,PW))));
@@ -5702,17 +5787,30 @@ async function composeText(i){
   ctx.drawImage(img,0,0,W,H);
   const t=TEMPLATES[p.tpl]||TEMPLATES[1];
 
-  /* 先に全コマの描き込み量を測る（文字を置く前の絵で測るため） */
-  const maps=(t.panels||[]).map(pn=>
-    buildDetail(ctx,pn.r[0]/100*W,pn.r[1]/100*H,pn.r[2]/100*W,pn.r[3]/100*H));
+  /* 絵から実際のコマ枠を探す。見つからなければテンプレの位置を使う */
+  let boxes=null;
+  try{
+    const det=detectPanels(cv,W,H);
+    if(det&&det.length===(t.panels||[]).length){
+      const ord=orderPanels(det);
+      boxes=[];
+      (t.panels||[]).forEach((pn,j)=>{boxes[j]=ord[pn.read-1]||null;});
+      if(boxes.some(b=>!b))boxes=null;
+    }
+  }catch(e){boxes=null;}
+  const geo=(t.panels||[]).map((pn,j)=>{
+    if(boxes)return {X:boxes[j][0],Y:boxes[j][1],PW:boxes[j][2]-boxes[j][0],PH:boxes[j][3]-boxes[j][1],fit:true};
+    return {X:pn.r[0]/100*W,Y:pn.r[1]/100*H,PW:pn.r[2]/100*W,PH:pn.r[3]/100*H,fit:false};
+  });
 
-  /* コマとコマの間の余白（ガター）。ここには絶対に置かない */
-  const GUT=Math.min(W,H)*0.045;
+  /* 先に全コマの描き込み量を測る（文字を置く前の絵で測るため） */
+  const maps=geo.map(q=>buildDetail(ctx,q.X,q.Y,q.PW,q.PH));
 
   (t.panels||[]).forEach((pn,j)=>{
-    const d=(p.panels||[])[j]||{},dm=maps[j];
-    const X=pn.r[0]/100*W,Y=pn.r[1]/100*H,PW=pn.r[2]/100*W,PH=pn.r[3]/100*H;
-    /* 実際に使ってよい範囲 */
+    const d=(p.panels||[])[j]||{},dm=maps[j],q=geo[j];
+    const X=q.X,Y=q.Y,PW=q.PW,PH=q.PH;
+    /* 枠線の内側に入れるための余白 */
+    const GUT=q.fit?Math.min(PW,PH)*0.055:Math.min(W,H)*0.045;
     const U={x:X+GUT,y:Y+GUT,w:Math.max(PW*0.30,PW-GUT*2),h:Math.max(PH*0.30,PH-GUT*2)};
     const taken=[];
     const put=(cx,cy,bw,bh)=>taken.push({x0:cx-bw/2,x1:cx+bw/2,y0:cy-bh/2,y1:cy+bh/2});
@@ -5856,7 +5954,8 @@ function toggleAppText(v){
 let chatBusy=false;
 function pageAsText(i){
   const p=P.pages[i],t=TEMPLATES[p.tpl]||TEMPLATES[1];
-  let q=`[P${i+1}]${p.title?" "+p.title:""}\n`;
+  let q=`[P${i+1}]\n`;
+  if(p.title)q+=`タイトル：${p.title}\n`;
   (t.panels||[]).forEach((pn,j)=>{
     const d=(p.panels||[])[j]||{};
     q+=`コマ${j+1}（${pn.pos}）\n`;
@@ -5897,6 +5996,8 @@ function chatPrompt(order){
   q+=`・直す必要がないページは絶対に出さない\n`;
   q+=`・出すページは、直さないコマも含めてそのページ全部を書く（そのまま上書きされるため）\n`;
   q+=`・意味が分からないときや確かめたいときは、---CHANGES--- を書かずに質問だけを返す\n`;
+  q+=`・ページの目印は [P3] だけを行に書く。見出しや説明を同じ行に書かない\n`;
+  q+=`・コードブロック（\u0060\u0060\u0060）で囲まない\n`;
   q+=`\n形式：\n---CHANGES---\n[P3]\n1N ナレーション（不要なら行ごと省く）\n1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n2N …（コマ番号を変えて同じ形式）\n`;
   q+=`\n■ 守ること\n`;
   q+=`・コマ数は変えない\n`;
@@ -5927,15 +6028,31 @@ async function sendChat(){
     const j=await r.json();
     addCost("直し",(j.usage||{}).cost);
     const raw=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
-    const cut=raw.split(/---+\s*CHANGES\s*---+/i);
-    const reply=(cut[0]||"").trim();
-    const body=(cut[1]||"").trim();
-    let pages=[];
+    let reply,body;
+    const cut=raw.split(/[-\u2500\u2015=]{2,}\s*CHANGES\s*[-\u2500\u2015=]{0,}/i);
+    if(cut.length>1){reply=(cut[0]||"").trim();body=(cut[1]||"").trim();}
+    else{
+      /* 目印を忘れても、[P3] から先を直しとして拾う */
+      const ls=raw.split("\n");
+      let at=-1;
+      for(let k=0;k<ls.length;k++){
+        if(/^\s*[\[\u3010\uff3b]?\s*P\s*[0-9]{1,2}\s*[\]\u3011\uff3d]\s*/i.test(ls[k])){at=k;break;}
+      }
+      if(at>=0){reply=ls.slice(0,at).join("\n").trim();body=ls.slice(at).join("\n").trim();}
+      else{reply=raw.trim();body="";}
+    }
+    let pages=[],note="";
     if(body){
-      const re=/^\s*\[?P\s*([0-9]{1,2})\]?\s*$/gm;let m;
+      const re=/^\s*[\[\u3010\uff3b]?\s*P\s*([0-9]{1,2})\s*[\]\u3011\uff3d]?/gim;let m;
       while((m=re.exec(body)))pages.push(+m[1]-1);
       pages=[...new Set(pages)].filter(x=>P.pages[x]).sort((a,b)=>a-b);
-      applyPanelsText(body,true);
+      const filled=applyPanelsText(body,true);
+      if(!filled){
+        pages=[];
+        note="\n\n※ 直した内容をアプリが読み取れませんでした。ページは変わっていません。\nもう一度、ページ番号を入れて短く書いてみてください。";
+      }
+    }else if(/直し|変更|修正/.test(reply)&&!/質問|確認|でしょうか|ですか？/.test(reply)){
+      note="\n\n※ 実際にはまだ直していません。「そのとおり直して」と返してください。";
     }
     if(keep!=="none"){
       if(keep==="common"){
@@ -5947,7 +6064,7 @@ async function sendChat(){
         const ro=document.getElementById("r-once");if(ro)ro.value=P.rules.once;
       }
     }
-    P.chat.push({who:"ai",text:reply||"（返事なし）",at:nowStamp(),pages:pages,
+    P.chat.push({who:"ai",text:(reply||"（返事なし）")+note,at:nowStamp(),pages:pages,
                  rule:(keep==="none"?"":keep)});
     save();
     renderPages();renderReadAll();renderDrawBox();renderOut();
