@@ -5914,7 +5914,7 @@ async function sendChat(){
   if(!P.pages.length){alert("先にページを作ってください。");return;}
   const key=orKey();
   if(!key){alert("先にAIキーを設定してください。");return;}
-  const keep=(document.getElementById("chatRule")||{}).value||"none";
+  const keep=(document.querySelector('input[name="chatRule"]:checked')||{}).value||"none";
   P.chat=P.chat||[];
   P.chat.push({who:"me",text:order,at:nowStamp()});
   if(ta)ta.value="";
@@ -6002,12 +6002,10 @@ function renderChat(toBottom){
       <button class="btn primary" id="chatBtn" onclick="sendChat()" ${chatBusy?"disabled":""}>${chatBusy?"考えています…":"送る"}</button>
     </div>
     <div class="row" style="margin-top:8px">
-      <label style="font-size:12px;display:inline-flex;gap:7px;align-items:center">このお願いをルールにも残す：
-        <select id="chatRule" style="width:auto;font-size:12px">
-          <option value="none">残さない（今回の直しだけ）</option>
-          <option value="once">この案件の間はずっと守る</option>
-          <option value="common">今後の全案件でずっと守る</option>
-        </select></label>
+      <span style="font-size:12px;color:var(--ink-2);align-self:center">このお願いをルールにも残す：</span>
+      <label class="sc"><input type="radio" name="chatRule" value="none" checked> 残さない（今回の直しだけ）</label>
+      <label class="sc"><input type="radio" name="chatRule" value="once"> この案件の間はずっと守る</label>
+      <label class="sc"><input type="radio" name="chatRule" value="common"> 今後の全案件でずっと守る</label>
       ${(P.chat||[]).length?`<button class="btn sm" onclick="clearChat()" style="margin-left:auto">やり取りを消す</button>`:""}
     </div>
   </div>`;
