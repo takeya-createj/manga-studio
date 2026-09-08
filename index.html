@@ -5552,15 +5552,51 @@ const TXT_FONT='"Yu Gothic","游ゴシック","Hiragino Kaku Gothic ProN","Noto 
 
 function textOn(){return P.plan.appText!==false;}
 
-function vCols(text,maxRows){
-  const cols=[];let cur=[];
-  for(const ch of String(text||"")){
-    if(ch==="\n"){if(cur.length)cols.push(cur);cur=[];continue;}
-    cur.push(ch);
-    if(cur.length>=maxRows){cols.push(cur);cur=[];}
+/* 行頭に来てはいけない文字 */
+const NO_START="、。，．・：；！？）」』】〉》｝］)]}ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶーゝゞ々〻!?,.";
+/* 行末に来てはいけない文字 */
+const NO_END="（「『【〈《｛［([{“‘";
+/* 1つのまとまりを、列をできるだけ均等に割って組む */
+function splitEven(seg,maxRows){
+  const chars=Array.from(seg);
+  if(!chars.length)return [];
+  let ncol=Math.max(1,Math.ceil(chars.length/maxRows));
+  for(let guard=0;guard<10;guard++){
+    const per=Math.ceil(chars.length/ncol);
+    const cols=[];let idx=0;
+    for(let i=0;i<ncol&&idx<chars.length;i++){
+      const take=Math.min(per,chars.length-idx);
+      cols.push(chars.slice(idx,idx+take));idx+=take;
+    }
+    /* 禁則処理：行頭の小さい文字や句点を前の列に引き上げる */
+    let moved=true,loops=0;
+    while(moved&&loops++<30){
+      moved=false;
+      for(let i=0;i<cols.length-1;i++){
+        while(cols[i+1].length>1&&NO_START.indexOf(cols[i+1][0])>=0&&cols[i].length<maxRows){
+          cols[i].push(cols[i+1].shift());moved=true;
+        }
+        while(cols[i].length>1&&NO_END.indexOf(cols[i][cols[i].length-1])>=0&&cols[i+1].length<maxRows){
+          cols[i+1].unshift(cols[i].pop());moved=true;
+        }
+      }
+    }
+    const use=cols.filter(c=>c.length);
+    if(use.length&&use.every(c=>c.length<=maxRows))return use;
+    ncol++;
   }
+  const cols=[];let cur=[];
+  chars.forEach(ch=>{cur.push(ch);if(cur.length>=maxRows){cols.push(cur);cur=[];}});
   if(cur.length)cols.push(cur);
-  return cols.length?cols:[[" "]];
+  return cols;
+}
+function vCols(text,maxRows){
+  const out=[];
+  String(text||"").split("\n").forEach(seg=>{
+    if(!seg)return;
+    splitEven(seg,maxRows).forEach(c=>out.push(c));
+  });
+  return out.length?out:[[" "]];
 }
 function vDraw(ctx,cols,rightX,topY,fs,lh,colW){
   ctx.textAlign="center";ctx.textBaseline="middle";
