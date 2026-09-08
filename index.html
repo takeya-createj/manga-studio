@@ -5682,7 +5682,7 @@ function analyzePage(srcCanvas,W,H){
 
   /* 余白のマス：明るくて、むらがない */
   const blank=new Uint8Array(n);
-  for(let k=0;k<n;k++)blank[k]=(L[k]>=232)?1:0;
+  for(let k=0;k<n;k++)blank[k]=(L[k]>=244)?1:0;   /* 紙の余白だけ。薄い色のコマの中身は含めない */
   const rate=(f,a,b)=>{let c=0;for(let k=a;k<b;k++)c+=f(k);return c/Math.max(1,b-a);};
   const blankRow=(y,x0,x1)=>rate(x=>blank[y*GW+x],x0,x1);
   const blankCol=(x,y0,y1)=>rate(y=>blank[y*GW+x],y0,y1);
