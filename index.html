@@ -5816,7 +5816,7 @@ function toggleAppText(v){
   recomposeAll(false);
 }
 /* ============ 言葉で書けば直る：修正のやり取り ============ */
-let fixPage=0;
+let fixPage=-1;   /* -1 ＝ 作品全体（既定） */
 function pageAsText(i){
   const p=P.pages[i],t=TEMPLATES[p.tpl]||TEMPLATES[1];
   let q=`[P${i+1}]${p.title?" "+p.title:""}\n`;
@@ -5831,7 +5831,8 @@ function pageAsText(i){
   });
   return q;
 }
-function fixPrompt(i,order){
+function fixPrompt(list,order){
+  if(typeof list==="number")list=[list];
   let q=`あなたはプロのマンガ原作者です。下の「今のページ」を、指示のとおりに直してください。\n\n`;
   q+=`■ 作品の前提\n`;
   if(P.meta.title)q+=`タイトル：${P.meta.title}\n`;
@@ -5843,7 +5844,8 @@ function fixPrompt(i,order){
     (c.calls||[]).forEach(x=>{if(x.by&&x.name)q+=`　呼び方：${x.by}は「${x.name}」と呼ぶ\n`;});
   });
   if(!P.characters.length)q+=`（未登録）\n`;
-  q+=`\n■ 今のページ\n`+pageAsText(i);
+  q+=`\n■ 今のページ\n`;
+  list.forEach(x=>{q+=pageAsText(x)+"\n";});
   q+=`\n■ 直しの指示\n${order}\n`;
   const cr=ruleLines(COMMON_RULES),or2=ruleLines(P.rules.once);
   if(cr.length){q+=`\n■ いつも守るルール\n`;cr.forEach(x=>q+="・"+x+"\n");}
@@ -5855,34 +5857,50 @@ function fixPrompt(i,order){
   q+=`・話者名は上の登場人物の名前をそのまま使う。登場人物にいない人が話すときは役割名（例：高齢の酥農家）を使う\n`;
   q+=`・「E」には、誰がどんな表情で何をしているかを具体的に書く\n`;
   q+=`\n■ 出力の形式（この形式以外は何も書かない）\n`;
-  q+=`[P${i+1}]\n1N ナレーション（不要なら行ごと省く）\n1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n2N …（コマ番号を変えて同じ形式）\n`;
+  q+=`※ 上にあるページ（${list.map(x=>"P"+(x+1)).join("・")}）をすべて出力すること\n`;
+  q+=`[P${list[0]+1}]\n1N ナレーション（不要なら行ごと省く）\n1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n2N …（コマ番号を変えて同じ形式）\n`;
   return q;
 }
 async function runFix(){
   const ta=document.getElementById("fixText");
   const order=(ta&&ta.value||"").trim();
   if(!order){alert("直したいことを書いてください。\n例：落胆しているのは高齢化した酥農家。安田社長ではない");return;}
-  const i=fixPage;
-  if(!P.pages[i]){alert("ページがありません。");return;}
+  const all=(fixPage===-1);
+  const i=all?0:fixPage;
+  if(!P.pages.length){alert("ページがありません。");return;}
   const key=orKey();
   if(!key){alert("先にAIキーを設定してください。");return;}
-  const scope=(document.querySelector('input[name="fixScope"]:checked')||{}).value||"page";
+  let scope=(document.querySelector('input[name="fixScope"]:checked')||{}).value||"page";
+  if(all&&scope==="page")scope="once";
+  if(all&&!confirm(`全${P.pages.length}ページを見直します。\n目安の費用：約${Math.max(2,Math.ceil(P.pages.length/4))}円\n\n進めてよろしいですか？`))return;
   const btn=document.getElementById("fixBtn"),st=document.getElementById("fixStatus");
   if(btn)btn.disabled=true;
   if(st)st.textContent="直しています…";
   try{
-    const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
-      headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
-      body:JSON.stringify({model:SCENARIO_MODEL,messages:[{role:"user",content:fixPrompt(i,order)}]})});
-    if(!r.ok)throw new Error("通信エラー "+r.status);
-    const j=await r.json();
-    addCost("直し",(j.usage||{}).cost);
-    const txt=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
-    const n=applyPanelsText(txt);
+    const groups=[];
+    if(all){for(let a=0;a<P.pages.length;a+=4)groups.push(P.pages.map((x,k)=>k).slice(a,a+4));}
+    else groups.push([i]);
+    let n=0;
+    for(let g=0;g<groups.length;g++){
+      if(st&&all)st.textContent=`直しています… P${groups[g][0]+1}〜P${groups[g][groups[g].length-1]+1}`;
+      const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
+        headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
+        body:JSON.stringify({model:SCENARIO_MODEL,messages:[{role:"user",content:fixPrompt(groups[g],order)}]})});
+      if(!r.ok)throw new Error("通信エラー "+r.status);
+      const j=await r.json();
+      addCost("直し",(j.usage||{}).cost);
+      const txt=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
+      n+=applyPanelsText(txt);
+    }
     if(!n)throw new Error("直した内容を読み取れませんでした。もう一度お試しください。");
     const p=P.pages[i];
-    p.fixLog=p.fixLog||[];
-    p.fixLog.push({text:order,scope:scope,at:nowStamp(),done:false});
+    if(all){
+      P.fixLogAll=P.fixLogAll||[];
+      P.fixLogAll.push({text:order,scope:scope,at:nowStamp()});
+    }else{
+      p.fixLog=p.fixLog||[];
+      p.fixLog.push({text:order,scope:scope,at:nowStamp(),done:false});
+    }
     if(scope==="common"){
       COMMON_RULES=(COMMON_RULES?COMMON_RULES.replace(/\n+$/,"")+"\n":"")+order;
       lsSet(CKEY,COMMON_RULES);
@@ -5895,11 +5913,18 @@ async function runFix(){
     if(ta)ta.value="";
     if(st)st.textContent="";
     renderDrawBox();renderPages();renderReadAll();renderOut();
-    const msg=p.img
-      ?`${i+1}ページの中身を直しました。\n\n絵に反映させるには描き直しが必要です（約${YEN_PER_PAGE}円）。\n今すぐ描き直しますか？`
-      :`${i+1}ページの中身を直しました。`;
-    if(p.img){if(confirm(msg))drawPages([i]);}
-    else{toast("直しました");alert(msg);}
+    if(all){
+      const drawn=P.pages.map((x,k)=>k).filter(k=>P.pages[k].img);
+      toast("全ページを直しました");
+      if(drawn.length&&confirm(`全ページの中身を直しました。\n\nすでに絵ができている ${drawn.length}ページ を今すぐ描き直しますか？\n目安：約${drawn.length*YEN_PER_PAGE}円`))drawPages(drawn);
+      else alert("全ページの中身を直しました。\n「5 校正」や「6 コマ割り」で確かめてから描き直してください。");
+    }else{
+      const msg=p.img
+        ?`${i+1}ページの中身を直しました。\n\n絵に反映させるには描き直しが必要です（約${YEN_PER_PAGE}円）。\n今すぐ描き直しますか？`
+        :`${i+1}ページの中身を直しました。`;
+      if(p.img){if(confirm(msg))drawPages([i]);}
+      else{toast("直しました");alert(msg);}
+    }
   }catch(e){
     if(st)st.textContent="";
     alert("直せませんでした。\n"+(e&&e.message||e));
@@ -5913,36 +5938,42 @@ function setFixPage(i){
   const ta=document.getElementById("fixText");if(ta)ta.focus();
 }
 function delFixLog(i,k){
+  if(i===-1){if(!P.fixLogAll)return;P.fixLogAll.splice(k,1);save();renderFixTalk();return;}
   const p=P.pages[i];if(!p||!p.fixLog)return;
   p.fixLog.splice(k,1);save();renderFixTalk();
 }
 function renderFixTalk(){
   const box=document.getElementById("fixTalkBox");if(!box)return;
   if(!P.pages.length){box.innerHTML="";return;}
-  if(fixPage>=P.pages.length)fixPage=0;
-  const p=P.pages[fixPage];
-  const opts=P.pages.map((x,i)=>`<option value="${i}" ${i===fixPage?"selected":""}>${i+1}ページ目　${esc((x.title||"").slice(0,14))}</option>`).join("");
-  const log=(p.fixLog||[]).map((f,k)=>`<div class="it"><b>${f.scope==="common"?"今後も":(f.scope==="once"?"今回中":"このページ")}</b>
+  if(fixPage>=P.pages.length)fixPage=-1;
+  const all=(fixPage===-1);
+  const p=P.pages[all?0:fixPage];
+  const opts=`<option value="-1" ${all?"selected":""}>0　作品全体（全${P.pages.length}ページ）</option>`
+    +P.pages.map((x,i)=>`<option value="${i}" ${i===fixPage?"selected":""}>${i+1}ページ目　${esc((x.title||"").slice(0,14))}</option>`).join("");
+  const src=all?(P.fixLogAll||[]).map(f=>Object.assign({},f,{allFlag:true})):(p.fixLog||[]);
+  const log=src.map((f,k)=>`<div class="it"><b>${f.allFlag?"全体":""}${f.scope==="common"?"今後も":(f.scope==="once"?"今回中":"このページ")}</b>
     <span>${esc(f.text)}<span style="color:var(--ink-3);font-size:11px">　${esc(f.at||"")}</span></span>
-    <button class="rm" onclick="delFixLog(${fixPage},${k})">削除</button></div>`).join("");
+    <button class="rm" onclick="delFixLog(${all?-1:fixPage},${k})">削除</button></div>`).join("");
   box.innerHTML=`<div class="fixtalk">
     <h3>気になるところを直す（普通の言葉で書いてください）</h3>
     <div class="row" style="margin:0 0 8px">
       <select id="fixSel" style="max-width:280px">${opts}</select>
-      <span style="font-size:11.5px;color:var(--ink-2)">例：落胆しているのは高齢化した酥農家。安田社長ではない</span>
+      <span style="font-size:11.5px;color:var(--ink-2)">${all
+        ?"全ページをまとめて見直します。人物の設定・呼び方・全体のトーンなどに使います。"
+        :"例：落胆しているのは高齢化した酥農家。安田社長ではない"}</span>
     </div>
     <textarea id="fixText" placeholder="直したいことをそのまま書いてください。&#10;例：2コマ目で落胆しているのは高齢化した酥農家。安田社長はそれを見ている側にする"></textarea>
     <div class="row">
-      <label class="sc"><input type="radio" name="fixScope" value="page" checked> このページだけ</label>
-      <label class="sc"><input type="radio" name="fixScope" value="once"> この案件の間はずっと守る</label>
+      <label class="sc" style="${all?"opacity:.4":""}"><input type="radio" name="fixScope" value="page" ${all?"disabled":"checked"}> このページだけ</label>
+      <label class="sc"><input type="radio" name="fixScope" value="once" ${all?"checked":""}> この案件の間はずっと守る</label>
       <label class="sc"><input type="radio" name="fixScope" value="common"> 今後の全案件でずっと守る</label>
     </div>
     <div class="row">
-      <button class="btn primary" id="fixBtn" onclick="runFix()">このとおりに直す</button>
+      <button class="btn primary" id="fixBtn" onclick="runFix()">${all?`全${P.pages.length}ページをこのとおりに直す`:"このとおりに直す"}</button>
       <span style="font-size:12px" id="fixStatus"></span>
       <span style="font-size:11.5px;color:var(--ink-3)">中身を直したあと、絵を描き直すか聞きます。</span>
     </div>
-    ${log?`<div class="fixlog"><div style="font-size:11px;color:var(--ink-3);margin-bottom:3px">このページへの直しの履歴</div>${log}</div>`:""}
+    ${log?`<div class="fixlog"><div style="font-size:11px;color:var(--ink-3);margin-bottom:3px">${all?"作品全体への直しの履歴":"このページへの直しの履歴"}</div>${log}</div>`:""}
   </div>`;
   const sel=document.getElementById("fixSel");
   if(sel)sel.onchange=()=>{fixPage=+sel.value;renderFixTalk();};
