@@ -5494,18 +5494,20 @@ function drawOne(i,textMode){
   window.__textMode=!!textMode;
   drawPages([i]).then(()=>{window.__textMode=false;});
 }
-function drawBar(main,sub){
+function drawBar(main,sub,showStop){
   const b=document.getElementById("drawBar");if(!b)return;
   b.classList.add("on");
   const m=document.getElementById("drawBarMain"),u=document.getElementById("drawBarSub");
   if(m)m.textContent=main;
   if(u&&sub!==undefined)u.textContent=sub;
+  const st=document.getElementById("drawBarStop");
+  if(st)st.hidden=(showStop===false);
 }
 function drawBarOff(){
   const b=document.getElementById("drawBar");if(!b)return;
   b.classList.remove("on");
   const s=document.getElementById("drawBarStop");
-  if(s){s.disabled=false;s.textContent="ここで止める";}
+  if(s){s.disabled=false;s.hidden=false;s.textContent="ここで止める";}
 }
 /* ================= 文字はアプリが重ねる（画像AIに日本語を描かせない） ================= */
 const V_ROT="ー―‐‑–—−〜～…‥（）()「」『』〈〉《》【】｛｝[]{}＜＞<>＝=｜|";
@@ -5936,15 +5938,38 @@ async function recompose(i,quiet){
 }
 async function recomposeAll(quiet){
   const list=P.pages.map((x,i)=>i).filter(i=>P.pages[i].art);
-  if(!list.length){if(!quiet)alert("文字なしの絵がまだありません。先に絵を作ってください。");return;}
-  for(const i of list)await recompose(i,true);
+  if(!list.length){if(!quiet)alert("文字なしの絵がまだありません。\n先に赤いボタンで絵を作ってください。");return;}
+  const st=document.getElementById("drawStatus");
+  let ng=0;
+  for(let k=0;k<list.length;k++){
+    if(!quiet){
+      const msg=`文字を入れ直しています… ${k+1}/${list.length}ページ`;
+      if(st)st.textContent=msg;
+      drawBar(msg,"絵は描き直しません。費用はかかりません",false);
+      await new Promise(r=>setTimeout(r,0));
+    }
+    const ok=await recompose(list[k],true);
+    if(!ok)ng++;
+  }
   save();
-  if(!quiet){renderDrawBox();renderOut();toast(list.length+"ページの文字を入れ直しました（無料）");}
-  else renderDrawBox();
+  if(!quiet){
+    drawBarOff();
+    renderDrawBox();renderOut();
+    const st2=document.getElementById("drawStatus");
+    if(st2)st2.textContent=`${list.length}ページの文字を入れ直しました。`+(ng?`（${ng}ページは失敗）`:"");
+    toast(list.length+"ページの文字を入れ直しました（無料）");
+  }else renderDrawBox();
 }
 async function recomposeOne(i){
+  const st=document.getElementById("drawStatus");
+  if(st)st.textContent=`${i+1}ページ目の文字を入れ直しています…`;
+  drawBar(`${i+1}ページ目の文字を入れ直しています…`,"絵は描き直しません",false);
+  await new Promise(r=>setTimeout(r,0));
   const ok=await recompose(i);
-  if(ok){save();renderDrawBox();renderOut();toast("文字を入れ直しました");}
+  drawBarOff();
+  if(ok){save();renderDrawBox();renderOut();toast("文字を入れ直しました");
+    const st2=document.getElementById("drawStatus");
+    if(st2)st2.textContent=`${i+1}ページ目の文字を入れ直しました。`;}
 }
 function toggleAppText(v){
   P.plan.appText=!!v;save();
@@ -6020,6 +6045,12 @@ async function sendChat(){
   P.chat.push({who:"me",text:order,at:nowStamp()});
   if(ta)ta.value="";
   chatBusy=true;save();renderChat(true);
+  const t0=Date.now();
+  const tick=setInterval(()=>{
+    const el=document.getElementById("chatWait");
+    if(el)el.textContent=`考えています… ${Math.round((Date.now()-t0)/1000)}秒`;
+    drawBar("直しを考えています…",`全${P.pages.length}ページを見ています　${Math.round((Date.now()-t0)/1000)}秒`,false);
+  },500);
   try{
     const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
       headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
@@ -6072,6 +6103,7 @@ async function sendChat(){
     P.chat.push({who:"ai",text:"うまくいきませんでした。\n"+(e&&e.message||e),at:nowStamp(),pages:[]});
     save();
   }
+  clearInterval(tick);drawBarOff();
   chatBusy=false;renderChat(true);
 }
 function chatRedraw(csv){
@@ -6104,7 +6136,7 @@ function renderChat(toBottom){
     const rl=m.rule?`<div class="cdid">✓ ${m.rule==="common"?"今後の全案件のルール":"この案件のルール"}に残しました。</div>`:"";
     return `<div class="cmsg ai"><div class="bub">${esc(m.text)}${did}${rl}</div></div>`;
   }).join("");
-  const busy=chatBusy?`<div class="cmsg ai"><div class="bub" style="color:var(--ink-3)">考えています…</div></div>`:"";
+  const busy=chatBusy?`<div class="cmsg ai"><div class="bub" style="color:var(--ink-3)"><span id="chatWait">考えています…</span></div></div>`:"";
   box.innerHTML=`<div class="fixtalk">
     <h3>直したいことを話す<span style="font-weight:400;font-size:11.5px;color:var(--ink-2)">　普通の言葉で書いてください。どのページを直すかはAIが判断します</span></h3>
     ${(P.chat||[]).length||busy?`<div class="chatwrap" id="chatWrap">${log}${busy}</div>`:
