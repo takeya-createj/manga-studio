@@ -5663,7 +5663,12 @@ function analyzePage(srcCanvas,W,H){
   g.drawImage(srcCanvas,0,0,GW,GH);
   let dd;try{dd=g.getImageData(0,0,GW,GH).data;}catch(e){return null;}
   const n=GW*GH,L=new Float32Array(n),ink=new Uint8Array(n);
-  for(let k=0;k<n;k++){const i=k*4;L[k]=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];ink[k]=L[k]<234?1:0;}
+  for(let k=0;k<n;k++){
+    const i=k*4;
+    L[k]=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];
+    const mn=Math.min(dd[i],dd[i+1],dd[i+2]);
+    ink[k]=(mn<243)?1:0;      /* ほぼ真っ白なところだけを余白とみなす */
+  }
 
   /* 縁から塗りつぶして「コマの外」を求める */
   const out=new Uint8Array(n),st=[];
