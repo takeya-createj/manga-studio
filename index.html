@@ -5657,91 +5657,13 @@ function rectMean(I,GW,GH,x0,y0,x1,y1){
   return (I[e*(GW+1)+c]-I[b*(GW+1)+c]-I[e*(GW+1)+a]+I[b*(GW+1)+a])/((c-a)*(e-b));
 }
 function analyzePage(srcCanvas,W,H){
-  const GW=Math.min(260,W),sc=GW/W,GH=Math.max(1,Math.round(H*sc));
+  const GW=Math.min(300,W),sc=GW/W,GH=Math.max(1,Math.round(H*sc));
   const cv=document.createElement("canvas");cv.width=GW;cv.height=GH;
   const g=cv.getContext("2d",{willReadFrequently:true});
   g.drawImage(srcCanvas,0,0,GW,GH);
   let dd;try{dd=g.getImageData(0,0,GW,GH).data;}catch(e){return null;}
-  const n=GW*GH,L=new Float32Array(n),ink=new Uint8Array(n);
-  for(let k=0;k<n;k++){
-    const i=k*4;
-    L[k]=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];
-    const mn=Math.min(dd[i],dd[i+1],dd[i+2]);
-    ink[k]=(mn<243)?1:0;      /* ほぼ真っ白なところだけを余白とみなす */
-  }
-
-  /* ノイズを1マス分飛び越えられる余白判定（JPEGの汚れで余白が途切れるのを防ぐ） */
-  const gap=new Uint8Array(n);
-  for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
-    const k=y*GW+x;
-    if(!ink[k]){gap[k]=1;continue;}
-    let w=0,c=0;
-    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-      const xx=x+dx,yy=y+dy;
-      if(xx<0||yy<0||xx>=GW||yy>=GH||(!dx&&!dy))continue;
-      c++;if(!ink[yy*GW+xx])w++;
-    }
-    if(c&&w/c>=0.72)gap[k]=1;
-  }
-  /* ほぼ全幅が余白の行・列は、確実にコマ間の余白 */
-  const seeds=[];
-  for(let y=0;y<GH;y++){
-    let w=0;for(let x=0;x<GW;x++)w+=gap[y*GW+x];
-    if(w/GW>=0.92)for(let x=0;x<GW;x++)if(gap[y*GW+x])seeds.push(y*GW+x);
-  }
-  for(let x=0;x<GW;x++){
-    let w=0;for(let y=0;y<GH;y++)w+=gap[y*GW+x];
-    if(w/GH>=0.92)for(let y=0;y<GH;y++)if(gap[y*GW+x])seeds.push(y*GW+x);
-  }
-  /* 縁と上の行・列から塗りつぶして「コマの外」を求める */
-  const out=new Uint8Array(n),st=seeds.slice();
-  for(let x=0;x<GW;x++){st.push(x);st.push((GH-1)*GW+x);}
-  for(let y=0;y<GH;y++){st.push(y*GW);st.push(y*GW+GW-1);}
-  while(st.length){
-    const k=st.pop();
-    if(out[k]||!gap[k])continue;
-    out[k]=1;
-    const x=k%GW,y=(k-x)/GW;
-    if(x>0)st.push(k-1);
-    if(x<GW-1)st.push(k+1);
-    if(y>0)st.push(k-GW);
-    if(y<GH-1)st.push(k+GW);
-  }
-  /* 枠線にもかからないよう、外側を2マス分広げる */
-  let cur=out;
-  for(let pass=0;pass<2;pass++){
-    const nx=new Uint8Array(cur);
-    for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
-      const k=y*GW+x;
-      if(cur[k])continue;
-      if((x>0&&cur[k-1])||(x<GW-1&&cur[k+1])||(y>0&&cur[k-GW])||(y<GH-1&&cur[k+GW]))nx[k]=1;
-    }
-    cur=nx;
-  }
-  const outside=cur;
-
-  /* 内側のかたまり＝コマ */
-  const comp=new Int16Array(n).fill(-1),comps=[];
-  for(let k0=0;k0<n;k0++){
-    if(outside[k0]||comp[k0]>=0)continue;
-    const id=comps.length,q=[k0];comp[k0]=id;
-    let x0=1e9,y0=1e9,x1=-1,y1=-1,cells=0;
-    while(q.length){
-      const k=q.pop();cells++;
-      const x=k%GW,y=(k-x)/GW;
-      if(x<x0)x0=x;
-      if(x>x1)x1=x;
-      if(y<y0)y0=y;
-      if(y>y1)y1=y;
-      if(x>0&&!outside[k-1]&&comp[k-1]<0){comp[k-1]=id;q.push(k-1);}
-      if(x<GW-1&&!outside[k+1]&&comp[k+1]<0){comp[k+1]=id;q.push(k+1);}
-      if(y>0&&!outside[k-GW]&&comp[k-GW]<0){comp[k-GW]=id;q.push(k-GW);}
-      if(y<GH-1&&!outside[k+GW]&&comp[k+GW]<0){comp[k+GW]=id;q.push(k+GW);}
-    }
-    comps.push({id,x0,y0,x1:x1+1,y1:y1+1,cells});
-  }
-  const keep=comps.filter(c=>c.cells>=n*0.018);
-  if(!keep.length)return null;
+  const n=GW*GH,L=new Float32Array(n);
+  for(let k=0;k<n;k++){const i=k*4;L[k]=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];}
 
   /* 描き込み量（周りの明るさのばらつき） */
   const det=new Float32Array(n);let mx=0;
@@ -5758,11 +5680,86 @@ function analyzePage(srcCanvas,W,H){
   }
   if(mx>0)for(let k=0;k<n;k++)det[k]/=mx;
 
-  return {GW,GH,sc,comp,comps:keep,det,detI:integral(GW,GH,det),
+  /* 余白のマス：明るくて、むらがない */
+  const blank=new Uint8Array(n),dark=new Uint8Array(n);
+  for(let k=0;k<n;k++){
+    blank[k]=(L[k]>=234&&det[k]<0.10)?1:0;
+    dark[k]=(L[k]<130)?1:0;
+  }
+  const rate=(f,a,b)=>{let c=0;for(let k=a;k<b;k++)c+=f(k);return c/Math.max(1,b-a);};
+  const blankRow=(y,x0,x1)=>rate(x=>blank[y*GW+x],x0,x1);
+  const blankCol=(x,y0,y1)=>rate(y=>blank[y*GW+x],y0,y1);
+  const darkRow =(y,x0,x1)=>rate(x=>dark[y*GW+x],x0,x1);
+  const darkCol =(x,y0,y1)=>rate(y=>dark[y*GW+x],y0,y1);
+
+  const BL=0.90;              /* 帯とみなす余白率 */
+  const DK=0.30;              /* 両側に枠線があること */
+  const minG=Math.max(2,Math.round(Math.min(GW,GH)*0.012));
+
+  function findBands(a,b,isBlank,isDark){
+    const raw=[];let st=-1;
+    for(let k=a;k<b;k++){
+      if(isBlank(k)>=BL){if(st<0)st=k;}
+      else{if(st>=0&&k-st>=minG)raw.push([st,k]);st=-1;}
+    }
+    if(st>=0&&b-st>=minG)raw.push([st,b]);
+    /* ページの端に接する帯は余白（切り目ではない） */
+    return raw.filter(r=>{
+      if(r[0]<=a||r[1]>=b)return false;
+      /* 切り目の両側に枠線があることを確かめる */
+      let up=0,dn=0;
+      for(let q=1;q<=3;q++){
+        if(r[0]-q>=a)up=Math.max(up,isDark(r[0]-q));
+        if(r[1]-1+q<b)dn=Math.max(dn,isDark(r[1]-1+q));
+      }
+      return up>=DK&&dn>=DK;
+    });
+  }
+  const out=[];
+  function trim(r){
+    let x0=r[0],y0=r[1],x1=r[2],y1=r[3];
+    while(y0<y1&&blankRow(y0,x0,x1)>=BL)y0++;
+    while(y1>y0&&blankRow(y1-1,x0,x1)>=BL)y1--;
+    while(x0<x1&&blankCol(x0,y0,y1)>=BL)x0++;
+    while(x1>x0&&blankCol(x1-1,y0,y1)>=BL)x1--;
+    return [x0,y0,x1,y1];
+  }
+  function split(r,depth){
+    r=trim(r);
+    const x0=r[0],y0=r[1],x1=r[2],y1=r[3];
+    if(x1-x0<GW*0.06||y1-y0<GH*0.04||depth>6){if(x1>x0&&y1>y0)out.push(r);return;}
+    const hb=findBands(y0,y1,k=>blankRow(k,x0,x1),k=>darkRow(k,x0,x1));
+    if(hb.length){
+      let prev=y0;
+      hb.forEach(b=>{if(b[0]-prev>GH*0.035)split([x0,prev,x1,b[0]],depth+1);prev=b[1];});
+      if(y1-prev>GH*0.035)split([x0,prev,x1,y1],depth+1);
+      return;
+    }
+    const vb=findBands(x0,x1,k=>blankCol(k,y0,y1),k=>darkCol(k,y0,y1));
+    if(vb.length){
+      let prev=x0;
+      vb.forEach(b=>{if(b[0]-prev>GW*0.05)split([prev,y0,b[0],y1],depth+1);prev=b[1];});
+      if(x1-prev>GW*0.05)split([prev,y0,x1,y1],depth+1);
+      return;
+    }
+    out.push(r);
+  }
+  split([0,0,GW,GH],0);
+  const comps=out
+    .filter(r=>(r[2]-r[0])*(r[3]-r[1])>=n*0.02)
+    .map((r,i)=>({id:i,x0:r[0],y0:r[1],x1:r[2],y1:r[3]}));
+  if(!comps.length)return null;
+  return {GW,GH,sc,det,detI:integral(GW,GH,det),comps,
+    comp:null,
     maskI(id){
-      const m=new Float32Array(n);
-      for(let k=0;k<n;k++)m[k]=(this.comp[k]===id)?1:0;
+      const c=this.comps.find(x=>x.id===id);
+      const m=new Float32Array(this.GW*this.GH);
+      if(c)for(let y=c.y0;y<c.y1;y++)for(let x=c.x0;x<c.x1;x++)m[y*this.GW+x]=1;
       return integral(this.GW,this.GH,m);
+    },
+    inComp(id,gx,gy){
+      const c=this.comps.find(x=>x.id===id);
+      return c?(gx>=c.x0&&gx<c.x1&&gy>=c.y0&&gy<c.y1):false;
     }};
 }
 /* 日本式の読み順（上から下、各段は右から左） */
@@ -5827,7 +5824,7 @@ function tailTarget(A,cid,cx,cy,bw,bh,U){
   let best=null;
   for(let gy=0;gy<A.GH;gy++)for(let gx=0;gx<A.GW;gx++){
     const k=gy*A.GW+gx;
-    if(A.comp[k]!==cid)continue;
+    if(!A.inComp(cid,gx,gy))continue;
     const px=(gx+0.5)/A.sc,py=(gy+0.5)/A.sc;
     if(py<cy+bh*0.10)continue;
     const dx=(px-cx)/Math.max(1,U.w),dy=(py-cy)/Math.max(1,U.h);
