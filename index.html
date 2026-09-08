@@ -413,6 +413,17 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
 .fixtalk label.sc{display:inline-flex;gap:5px;align-items:center;font-size:12px;cursor:pointer;
   border:1px solid #d9c79c;background:#fff;border-radius:20px;padding:5px 11px}
 .fixtalk label.sc input{width:auto;margin:0}
+.chatwrap{max-height:360px;overflow-y:auto;padding:4px 2px 8px;margin-bottom:10px}
+.cmsg{display:flex;margin-bottom:9px}
+.cmsg .bub{max-width:82%;font-size:13px;line-height:1.75;padding:9px 13px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
+.cmsg.me{justify-content:flex-end}
+.cmsg.me .bub{background:#8a5a0b;color:#fff;border-bottom-right-radius:3px}
+.cmsg.ai .bub{background:#fff;border:1px solid #d9c79c;border-bottom-left-radius:3px}
+.cmsg .at{font-size:10px;color:var(--ink-3);margin:3px 4px 0;align-self:flex-end}
+.cdid{margin-top:7px;padding-top:7px;border-top:1px dashed #d9c79c;font-size:11.5px;color:#8a5a0b}
+.cdid button{margin-top:5px}
+.chatbar{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.chatbar textarea{flex:1 1 320px}
 .fixlog{margin-top:11px;border-top:1px dashed #d9c79c;padding-top:9px}
 .fixlog .it{font-size:12px;line-height:1.75;padding:5px 0;border-bottom:1px dotted #e5d9bd;
   display:flex;gap:8px;align-items:flex-start}
@@ -4327,14 +4338,22 @@ function buildPanelsPrompt(from,to){
   q+=`・最終ページには読者への呼びかけを入れる\n`;
   return q;
 }
-function applyPanelsText(txt){
+function applyPanelsText(txt,replace){
   const lines=String(txt||"").replace(/\r/g,"").split("\n");
   let pi=-1,filled=0;
+  const seen={};
   const nameToId={};
   P.characters.forEach(c=>{if(c.name)nameToId[c.name.trim()]=c.id;});
   lines.forEach(ln=>{
     const mp=ln.match(/^\s*\[?P\s*([0-9]{1,2})\]?\s*$/);
-    if(mp){pi=+mp[1]-1;return;}
+    if(mp){
+      pi=+mp[1]-1;
+      if(replace&&P.pages[pi]&&!seen[pi]){
+        seen[pi]=true;
+        P.pages[pi].panels.forEach(d=>{d.lines=[];d.narration="";d.bg="";d.bgType="";d.ono="";d.cast=[];});
+      }
+      return;
+    }
     if(pi<0||!P.pages[pi])return;
     const m=ln.match(/^\s*([0-9])\s*([NSEGO])\s+(.*)$/);
     if(!m)return;
@@ -5536,17 +5555,18 @@ function drawBubble(ctx,cx,cy,rw,rh,tx,ty,kind){
   ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=lw;ctx.lineJoin="round";
   ctx.beginPath();
   if(kind==="thought"){
-    const n=18;
-    for(let i=0;i<=n;i++){
-      const a=i/n*Math.PI*2, wob=1+(i%2?0.075:-0.045);
-      const x=cx+rw*wob*Math.cos(a), y=cy+rh*wob*Math.sin(a);
-      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    const n=20;
+    ctx.moveTo(cx+rw,cy);
+    for(let i=1;i<=n;i++){
+      const a0=(i-1)/n*Math.PI*2,a1=i/n*Math.PI*2,am=(a0+a1)/2,bul=1.16;
+      ctx.quadraticCurveTo(cx+rw*bul*Math.cos(am),cy+rh*bul*Math.sin(am),
+                           cx+rw*Math.cos(a1),cy+rh*Math.sin(a1));
     }
     ctx.closePath();
   }else if(kind==="shout"){
-    const n=26;
+    const n=24;
     for(let i=0;i<n;i++){
-      const a=i/n*Math.PI*2, wob=(i%2?1.20:0.90);
+      const a=i/n*Math.PI*2, wob=(i%2?1.16:0.95);
       const x=cx+rw*wob*Math.cos(a), y=cy+rh*wob*Math.sin(a);
       i?ctx.lineTo(x,y):ctx.moveTo(x,y);
     }
@@ -5697,29 +5717,47 @@ async function composeText(i){
     const taken=[];
     const put=(cx,cy,bw,bh)=>taken.push({x0:cx-bw/2,x1:cx+bw/2,y0:cy-bh/2,y1:cy+bh/2});
     /* この範囲に必ず収まるまで小さくする */
-    const fitIn=(txt,maxFs,weight,padRateW,padRateH)=>{
+    const boxShape=(pw,ph)=>f=>({bw:f.w+f.fs*pw,bh:f.h+f.fs*ph});
+    /* 吹き出し：文字の四角を楾円の内側に入れ、痩せすぎないよう縦横比を制限 */
+    const bubbleShape=(kd)=>f=>{
+      const k=kd==="shout"?1.30:1.42;          /* ≈√2。文字の角が外に出ない大きさ */
+      let bw=f.w*k+f.fs*1.15, bh=f.h*(k*0.92)+f.fs*1.05;
+      const r=bh/bw;
+      if(r>1.9)bw=bh/1.9;                       /* 縦長すぎを丸くする */
+      if(r<0.62)bh=bw*0.62;                     /* 平たすぎも丸くする */
+      return {bw,bh};
+    };
+    const fitIn=(txt,maxFs,weight,shape)=>{
       let fs=maxFs;
-      for(let k=0;k<26;k++){
+      for(let k=0;k<30;k++){
         const f=fitVert(txt,U.w*0.62,U.h*0.62,fs,weight);
-        const bw=f.w+f.fs*padRateW,bh=f.h+f.fs*padRateH;
-        if((bw<=U.w&&bh<=U.h)||f.fs<=11)return {f,bw,bh};
+        const sz=shape(f);
+        if((sz.bw<=U.w&&sz.bh<=U.h)||f.fs<=11)return {f,bw:sz.bw,bh:sz.bh};
         fs=Math.max(11,f.fs-1);
       }
       const f=fitVert(txt,U.w*0.62,U.h*0.62,11,weight);
-      return {f,bw:Math.min(U.w,f.w+f.fs*padRateW),bh:Math.min(U.h,f.h+f.fs*padRateH)};
+      const sz=shape(f);
+      return {f,bw:Math.min(U.w,sz.bw),bh:Math.min(U.h,sz.bh)};
     };
 
     /* ナレーション：四角い枠 */
     const nar=(d.narration||"").trim();
     if(nar){
-      const r=fitIn(breakCommas(nar),Math.min(U.h*0.070,U.w*0.055,34),600,0.8,0.8);
+      const r=fitIn(breakCommas(nar),Math.min(U.h*0.070,U.w*0.055,34),600,boxShape(0.85,0.85));
       const f=r.f;
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
       const pos=placeBox(dm,r.bw,r.bh,U.x+r.bw/2,U.y+r.bh/2,taken,U,{top:true});
       const bx=pos.cx-r.bw/2,by=pos.cy-r.bh/2;
       ctx.save();
       ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=Math.max(2,f.fs*0.09);
-      ctx.fillRect(bx,by,r.bw,r.bh);ctx.strokeRect(bx,by,r.bw,r.bh);
+      const rr=Math.min(r.bw,r.bh)*0.13;
+      ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(bx,by,r.bw,r.bh,rr);
+      else{ctx.moveTo(bx+rr,by);ctx.lineTo(bx+r.bw-rr,by);ctx.quadraticCurveTo(bx+r.bw,by,bx+r.bw,by+rr);
+        ctx.lineTo(bx+r.bw,by+r.bh-rr);ctx.quadraticCurveTo(bx+r.bw,by+r.bh,bx+r.bw-rr,by+r.bh);
+        ctx.lineTo(bx+rr,by+r.bh);ctx.quadraticCurveTo(bx,by+r.bh,bx,by+r.bh-rr);
+        ctx.lineTo(bx,by+rr);ctx.quadraticCurveTo(bx,by,bx+rr,by);ctx.closePath();}
+      ctx.fill();ctx.stroke();
       ctx.fillStyle="#111";
       vDraw(ctx,f.cols,bx+r.bw-f.fs*0.40,by+f.fs*0.40,f.fs,f.lh,f.colW);
       ctx.restore();
@@ -5734,8 +5772,7 @@ async function composeText(i){
         const kd=l.kind||"normal";
         const mag=kd==="shout"?1.16:(kd==="small"?0.82:1);
         const txt=breakCommas(String(l.text).replace(/^\u300c|\u300d$/g,""));
-        const bal=kd==="shout"?1.55:1.80,vb=kd==="shout"?1.15:1.40;
-        const r=fitIn(txt,Math.max(11,base*sc*mag),kd==="shout"?800:700,bal,vb);
+        const r=fitIn(txt,Math.max(11,base*sc*mag),kd==="shout"?800:700,bubbleShape(kd));
         return {kd,f:r.f,bw:r.bw,bh:r.bh,rw:r.bw/2,rh:r.bh/2};
       });
       let items=null;
@@ -5767,7 +5804,7 @@ async function composeText(i){
     /* オノマトペ：白抜きの太字 */
     const ono=(d.ono||"").trim();
     if(ono){
-      const r=fitIn(ono,Math.min(U.h*0.17,U.w*0.14,64),800,0.4,0.4);
+      const r=fitIn(ono,Math.min(U.h*0.17,U.w*0.14,64),800,boxShape(0.4,0.4));
       const f=r.f;
       ctx.save();
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
@@ -5816,7 +5853,7 @@ function toggleAppText(v){
   recomposeAll(false);
 }
 /* ============ 言葉で書けば直る：修正のやり取り ============ */
-let fixPage=-1;   /* -1 ＝ 作品全体（既定） */
+let chatBusy=false;
 function pageAsText(i){
   const p=P.pages[i],t=TEMPLATES[p.tpl]||TEMPLATES[1];
   let q=`[P${i+1}]${p.title?" "+p.title:""}\n`;
@@ -5831,152 +5868,153 @@ function pageAsText(i){
   });
   return q;
 }
-function fixPrompt(list,order){
-  if(typeof list==="number")list=[list];
-  let q=`あなたはプロのマンガ原作者です。下の「今のページ」を、指示のとおりに直してください。\n\n`;
+function chatPrompt(order){
+  let q=`あなたはマンガ制作のアシスタントです。制作者からの相談に答え、必要ならマンガの中身を直します。\n\n`;
   q+=`■ 作品の前提\n`;
   if(P.meta.title)q+=`タイトル：${P.meta.title}\n`;
   q+=`目的：${ucLabels()||"—"}　読者：${P.meta.target||"—"}\n`;
   if(P.scenario.message)q+=`伝えたいこと：${P.scenario.message}\n`;
   q+=`\n■ 登場人物\n`;
   P.characters.forEach(c=>{
-    q+=`・${c.name||"名前未設定"}${c.role?"（"+c.role+"）":""}\n`;
+    q+=`・${c.name||"名前未設定"}${c.role?"（"+c.role+"）":""}${c.feature?"／"+c.feature:""}\n`;
     (c.calls||[]).forEach(x=>{if(x.by&&x.name)q+=`　呼び方：${x.by}は「${x.name}」と呼ぶ\n`;});
   });
   if(!P.characters.length)q+=`（未登録）\n`;
-  q+=`\n■ 今のページ\n`;
-  list.forEach(x=>{q+=pageAsText(x)+"\n";});
-  q+=`\n■ 直しの指示\n${order}\n`;
   const cr=ruleLines(COMMON_RULES),or2=ruleLines(P.rules.once);
   if(cr.length){q+=`\n■ いつも守るルール\n`;cr.forEach(x=>q+="・"+x+"\n");}
-  if(or2.length){q+=`\n■ 今回だけのルール\n`;or2.forEach(x=>q+="・"+x+"\n");}
+  if(or2.length){q+=`\n■ この作品だけのルール\n`;or2.forEach(x=>q+="・"+x+"\n");}
+  q+=`\n■ 今の全ページ\n`;
+  P.pages.forEach((x,k)=>{q+=pageAsText(k)+"\n";});
+  const hist=(P.chat||[]).slice(-8);
+  if(hist.length>1){
+    q+=`\n■ これまでのやり取り\n`;
+    hist.forEach(m=>{q+=`${m.who==="me"?"制作者":"あなた"}：${m.text}\n`;});
+  }
+  q+=`\n■ 今回の相談\n${order}\n`;
+  q+=`\n■ 答え方\n`;
+  q+=`1つ目：まず日本語で短く返事をする（3行以内）。どのページの何をどう直したかを書く\n`;
+  q+=`2つ目：直す必要があるときだけ、返事のあとに ---CHANGES--- と書き、その下に直したページだけを下の形式で出す\n`;
+  q+=`・直す必要がないページは絶対に出さない\n`;
+  q+=`・出すページは、直さないコマも含めてそのページ全部を書く（そのまま上書きされるため）\n`;
+  q+=`・意味が分からないときや確かめたいときは、---CHANGES--- を書かずに質問だけを返す\n`;
+  q+=`\n形式：\n---CHANGES---\n[P3]\n1N ナレーション（不要なら行ごと省く）\n1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n2N …（コマ番号を変えて同じ形式）\n`;
   q+=`\n■ 守ること\n`;
-  q+=`・指示された箇所だけ直す。それ以外は今のままにする\n`;
   q+=`・コマ数は変えない\n`;
   q+=`・セリフは1つの吹き出しにつき30字以内。読点「、」は使わない\n`;
-  q+=`・話者名は上の登場人物の名前をそのまま使う。登場人物にいない人が話すときは役割名（例：高齢の酥農家）を使う\n`;
+  q+=`・話者名は登場人物の名前をそのまま使う。登場人物にいない人が話すときは役割名（例：高齢の酥農家）を使う\n`;
   q+=`・「E」には、誰がどんな表情で何をしているかを具体的に書く\n`;
-  q+=`\n■ 出力の形式（この形式以外は何も書かない）\n`;
-  q+=`※ 上にあるページ（${list.map(x=>"P"+(x+1)).join("・")}）をすべて出力すること\n`;
-  q+=`[P${list[0]+1}]\n1N ナレーション（不要なら行ごと省く）\n1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n2N …（コマ番号を変えて同じ形式）\n`;
+  q+=`・指示されていないことは変えない\n`;
   return q;
 }
-async function runFix(){
-  const ta=document.getElementById("fixText");
+async function sendChat(){
+  if(chatBusy)return;
+  const ta=document.getElementById("chatText");
   const order=(ta&&ta.value||"").trim();
-  if(!order){alert("直したいことを書いてください。\n例：落胆しているのは高齢化した酥農家。安田社長ではない");return;}
-  const all=(fixPage===-1);
-  const i=all?0:fixPage;
-  if(!P.pages.length){alert("ページがありません。");return;}
+  if(!order){if(ta)ta.focus();return;}
+  if(!P.pages.length){alert("先にページを作ってください。");return;}
   const key=orKey();
   if(!key){alert("先にAIキーを設定してください。");return;}
-  let scope=(document.querySelector('input[name="fixScope"]:checked')||{}).value||"page";
-  if(all&&scope==="page")scope="once";
-  if(all&&!confirm(`全${P.pages.length}ページを見直します。\n目安の費用：約${Math.max(2,Math.ceil(P.pages.length/4))}円\n\n進めてよろしいですか？`))return;
-  const btn=document.getElementById("fixBtn"),st=document.getElementById("fixStatus");
-  if(btn)btn.disabled=true;
-  if(st)st.textContent="直しています…";
+  const keep=(document.getElementById("chatRule")||{}).value||"none";
+  P.chat=P.chat||[];
+  P.chat.push({who:"me",text:order,at:nowStamp()});
+  if(ta)ta.value="";
+  chatBusy=true;save();renderChat(true);
   try{
-    const groups=[];
-    if(all){for(let a=0;a<P.pages.length;a+=4)groups.push(P.pages.map((x,k)=>k).slice(a,a+4));}
-    else groups.push([i]);
-    let n=0;
-    for(let g=0;g<groups.length;g++){
-      if(st&&all)st.textContent=`直しています… P${groups[g][0]+1}〜P${groups[g][groups[g].length-1]+1}`;
-      const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
-        headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
-        body:JSON.stringify({model:SCENARIO_MODEL,messages:[{role:"user",content:fixPrompt(groups[g],order)}]})});
-      if(!r.ok)throw new Error("通信エラー "+r.status);
-      const j=await r.json();
-      addCost("直し",(j.usage||{}).cost);
-      const txt=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
-      n+=applyPanelsText(txt);
+    const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
+      headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
+      body:JSON.stringify({model:SCENARIO_MODEL,messages:[{role:"user",content:chatPrompt(order)}]})});
+    if(!r.ok)throw new Error("通信エラー "+r.status);
+    const j=await r.json();
+    addCost("直し",(j.usage||{}).cost);
+    const raw=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
+    const cut=raw.split(/---+\s*CHANGES\s*---+/i);
+    const reply=(cut[0]||"").trim();
+    const body=(cut[1]||"").trim();
+    let pages=[];
+    if(body){
+      const re=/^\s*\[?P\s*([0-9]{1,2})\]?\s*$/gm;let m;
+      while((m=re.exec(body)))pages.push(+m[1]-1);
+      pages=[...new Set(pages)].filter(x=>P.pages[x]).sort((a,b)=>a-b);
+      applyPanelsText(body,true);
     }
-    if(!n)throw new Error("直した内容を読み取れませんでした。もう一度お試しください。");
-    const p=P.pages[i];
-    if(all){
-      P.fixLogAll=P.fixLogAll||[];
-      P.fixLogAll.push({text:order,scope:scope,at:nowStamp()});
-    }else{
-      p.fixLog=p.fixLog||[];
-      p.fixLog.push({text:order,scope:scope,at:nowStamp(),done:false});
+    if(keep!=="none"){
+      if(keep==="common"){
+        COMMON_RULES=(COMMON_RULES?COMMON_RULES.replace(/\n+$/,"")+"\n":"")+order;
+        lsSet(CKEY,COMMON_RULES);
+        const rc=document.getElementById("r-common");if(rc)rc.value=COMMON_RULES;
+      }else{
+        P.rules.once=(P.rules.once?P.rules.once.replace(/\n+$/,"")+"\n":"")+order;
+        const ro=document.getElementById("r-once");if(ro)ro.value=P.rules.once;
+      }
     }
-    if(scope==="common"){
-      COMMON_RULES=(COMMON_RULES?COMMON_RULES.replace(/\n+$/,"")+"\n":"")+order;
-      lsSet(CKEY,COMMON_RULES);
-      const rc=document.getElementById("r-common");if(rc)rc.value=COMMON_RULES;
-    }else if(scope==="once"){
-      P.rules.once=(P.rules.once?P.rules.once.replace(/\n+$/,"")+"\n":"")+order;
-      const ro=document.getElementById("r-once");if(ro)ro.value=P.rules.once;
-    }
+    P.chat.push({who:"ai",text:reply||"（返事なし）",at:nowStamp(),pages:pages,
+                 rule:(keep==="none"?"":keep)});
     save();
-    if(ta)ta.value="";
-    if(st)st.textContent="";
-    renderDrawBox();renderPages();renderReadAll();renderOut();
-    if(all){
-      const drawn=P.pages.map((x,k)=>k).filter(k=>P.pages[k].img);
-      toast("全ページを直しました");
-      if(drawn.length&&confirm(`全ページの中身を直しました。\n\nすでに絵ができている ${drawn.length}ページ を今すぐ描き直しますか？\n目安：約${drawn.length*YEN_PER_PAGE}円`))drawPages(drawn);
-      else alert("全ページの中身を直しました。\n「5 校正」や「6 コマ割り」で確かめてから描き直してください。");
-    }else{
-      const msg=p.img
-        ?`${i+1}ページの中身を直しました。\n\n絵に反映させるには描き直しが必要です（約${YEN_PER_PAGE}円）。\n今すぐ描き直しますか？`
-        :`${i+1}ページの中身を直しました。`;
-      if(p.img){if(confirm(msg))drawPages([i]);}
-      else{toast("直しました");alert(msg);}
-    }
+    renderPages();renderReadAll();renderDrawBox();renderOut();
   }catch(e){
-    if(st)st.textContent="";
-    alert("直せませんでした。\n"+(e&&e.message||e));
+    P.chat.push({who:"ai",text:"うまくいきませんでした。\n"+(e&&e.message||e),at:nowStamp(),pages:[]});
+    save();
   }
-  if(btn)btn.disabled=false;
+  chatBusy=false;renderChat(true);
+}
+function chatRedraw(csv){
+  const list=String(csv).split(",").map(Number).filter(x=>P.pages[x]);
+  if(!list.length)return;
+  if(!confirm(`${list.map(x=>x+1).join("・")}ページ目の絵を描き直します。\n目安：約${list.length*YEN_PER_PAGE}円\n\nよろしいですか？`))return;
+  drawPages(list);
+}
+function clearChat(){
+  if(!confirm("この案件のやり取りをすべて消します。\n直した内容は消えません。\n\nよろしいですか？"))return;
+  P.chat=[];save();renderChat();
 }
 function setFixPage(i){
-  fixPage=i;renderFixTalk();
   const b=document.getElementById("fixTalkBox");
   if(b)b.scrollIntoView({behavior:"smooth",block:"center"});
-  const ta=document.getElementById("fixText");if(ta)ta.focus();
+  const ta=document.getElementById("chatText");
+  if(ta){ta.value=`${i+1}ページ目、`;ta.focus();
+    ta.setSelectionRange(ta.value.length,ta.value.length);}
 }
-function delFixLog(i,k){
-  if(i===-1){if(!P.fixLogAll)return;P.fixLogAll.splice(k,1);save();renderFixTalk();return;}
-  const p=P.pages[i];if(!p||!p.fixLog)return;
-  p.fixLog.splice(k,1);save();renderFixTalk();
-}
-function renderFixTalk(){
+function renderChat(toBottom){
   const box=document.getElementById("fixTalkBox");if(!box)return;
   if(!P.pages.length){box.innerHTML="";return;}
-  if(fixPage>=P.pages.length)fixPage=-1;
-  const all=(fixPage===-1);
-  const p=P.pages[all?0:fixPage];
-  const opts=`<option value="-1" ${all?"selected":""}>0　作品全体（全${P.pages.length}ページ）</option>`
-    +P.pages.map((x,i)=>`<option value="${i}" ${i===fixPage?"selected":""}>${i+1}ページ目　${esc((x.title||"").slice(0,14))}</option>`).join("");
-  const src=all?(P.fixLogAll||[]).map(f=>Object.assign({},f,{allFlag:true})):(p.fixLog||[]);
-  const log=src.map((f,k)=>`<div class="it"><b>${f.allFlag?"全体":""}${f.scope==="common"?"今後も":(f.scope==="once"?"今回中":"このページ")}</b>
-    <span>${esc(f.text)}<span style="color:var(--ink-3);font-size:11px">　${esc(f.at||"")}</span></span>
-    <button class="rm" onclick="delFixLog(${all?-1:fixPage},${k})">削除</button></div>`).join("");
+  const log=(P.chat||[]).map(m=>{
+    if(m.who==="me")return `<div class="cmsg me"><div class="bub">${esc(m.text)}</div></div>`;
+    const pg=(m.pages||[]).filter(x=>P.pages[x]);
+    const did=pg.length
+      ?`<div class="cdid">✓ ${pg.map(x=>x+1).join("・")}ページ目の中身を直しました。
+         ${pg.some(x=>P.pages[x].img)?`<br><button class="btn sm" onclick="chatRedraw('${pg.join(",")}')">この${pg.length}ページの絵を描き直す（約${pg.length*YEN_PER_PAGE}円）</button>`:""}</div>`
+      :"";
+    const rl=m.rule?`<div class="cdid">✓ ${m.rule==="common"?"今後の全案件のルール":"この案件のルール"}に残しました。</div>`:"";
+    return `<div class="cmsg ai"><div class="bub">${esc(m.text)}${did}${rl}</div></div>`;
+  }).join("");
+  const busy=chatBusy?`<div class="cmsg ai"><div class="bub" style="color:var(--ink-3)">考えています…</div></div>`:"";
   box.innerHTML=`<div class="fixtalk">
-    <h3>気になるところを直す（普通の言葉で書いてください）</h3>
-    <div class="row" style="margin:0 0 8px">
-      <select id="fixSel" style="max-width:280px">${opts}</select>
-      <span style="font-size:11.5px;color:var(--ink-2)">${all
-        ?"全ページをまとめて見直します。人物の設定・呼び方・全体のトーンなどに使います。"
-        :"例：落胆しているのは高齢化した酥農家。安田社長ではない"}</span>
+    <h3>直したいことを話す<span style="font-weight:400;font-size:11.5px;color:var(--ink-2)">　普通の言葉で書いてください。どのページを直すかはAIが判断します</span></h3>
+    ${(P.chat||[]).length||busy?`<div class="chatwrap" id="chatWrap">${log}${busy}</div>`:
+      `<div style="font-size:12.5px;color:var(--ink-2);line-height:1.9;margin-bottom:10px">
+        例えばこんな風に書いてください。<br>
+        ・2ページ目、落胆しているのは高齢化した酥農家。安田社長ではない<br>
+        ・全体に悲壮感が強い。もう少し前向きなトーンにして<br>
+        ・社員は安田さんを「社長」、奧さんは「お父さん」と呼ぶように
+      </div>`}
+    <div class="chatbar">
+      <textarea id="chatText" rows="2" placeholder="直したいことをここに書いて、Ctrl+Enter で送る"></textarea>
+      <button class="btn primary" id="chatBtn" onclick="sendChat()" ${chatBusy?"disabled":""}>${chatBusy?"考えています…":"送る"}</button>
     </div>
-    <textarea id="fixText" placeholder="直したいことをそのまま書いてください。&#10;例：2コマ目で落胆しているのは高齢化した酥農家。安田社長はそれを見ている側にする"></textarea>
-    <div class="row">
-      <label class="sc" style="${all?"opacity:.4":""}"><input type="radio" name="fixScope" value="page" ${all?"disabled":"checked"}> このページだけ</label>
-      <label class="sc"><input type="radio" name="fixScope" value="once" ${all?"checked":""}> この案件の間はずっと守る</label>
-      <label class="sc"><input type="radio" name="fixScope" value="common"> 今後の全案件でずっと守る</label>
+    <div class="row" style="margin-top:8px">
+      <label style="font-size:12px;display:inline-flex;gap:7px;align-items:center">このお願いをルールにも残す：
+        <select id="chatRule" style="width:auto;font-size:12px">
+          <option value="none">残さない（今回の直しだけ）</option>
+          <option value="once">この案件の間はずっと守る</option>
+          <option value="common">今後の全案件でずっと守る</option>
+        </select></label>
+      ${(P.chat||[]).length?`<button class="btn sm" onclick="clearChat()" style="margin-left:auto">やり取りを消す</button>`:""}
     </div>
-    <div class="row">
-      <button class="btn primary" id="fixBtn" onclick="runFix()">${all?`全${P.pages.length}ページをこのとおりに直す`:"このとおりに直す"}</button>
-      <span style="font-size:12px" id="fixStatus"></span>
-      <span style="font-size:11.5px;color:var(--ink-3)">中身を直したあと、絵を描き直すか聞きます。</span>
-    </div>
-    ${log?`<div class="fixlog"><div style="font-size:11px;color:var(--ink-3);margin-bottom:3px">${all?"作品全体への直しの履歴":"このページへの直しの履歴"}</div>${log}</div>`:""}
   </div>`;
-  const sel=document.getElementById("fixSel");
-  if(sel)sel.onchange=()=>{fixPage=+sel.value;renderFixTalk();};
+  const ta=document.getElementById("chatText");
+  if(ta)ta.onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter")sendChat();};
+  const w=document.getElementById("chatWrap");
+  if(w&&toBottom)w.scrollTop=w.scrollHeight;
 }
 function stopDraw(){
   window.__stopDraw=true;
@@ -6030,7 +6068,7 @@ function renderDrawBox(keepStatus){
       </div>
     </div>`).join("")}</div>`:""}
   <div id="fixTalkBox"></div>`;
-  renderCostLines();renderFixTalk();
+  renderCostLines();renderChat();
 }
 function showPageImage(i){
   const p=P.pages[i];if(!p||!p.img)return;
