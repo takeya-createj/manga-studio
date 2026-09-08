@@ -5909,29 +5909,26 @@ async function composeText(i){
   const geo=(t.panels||[]).map(pn=>({
     X:pn.r[0]/100*W,Y:pn.r[1]/100*H,PW:pn.r[2]/100*W,PH:pn.r[3]/100*H,cid:-1
   }));
-  if(A&&A.comps.length){
+  /* コマの数がぴったり合ったときだけ検出結果を使う。
+     合わないときはテンプレの位置に戻す（外すより安全） */
+  const detN=A?A.comps.length:0;
+  p.detN=detN;p.detOK=false;
+  if(A&&detN===geo.length&&detN>0){
     const ord=orderComps(A.comps);
-    if(ord.length===geo.length){
-      (t.panels||[]).forEach((pn,j)=>{const c=ord[pn.read-1];if(c)geo[j].cid=c.id;});
-    }else{
-      geo.forEach(q=>{
-        let best=null;
-        A.comps.forEach(c=>{
-          const cx0=c.x0/A.sc,cy0=c.y0/A.sc,cx1=c.x1/A.sc,cy1=c.y1/A.sc;
-          const ox=Math.min(q.X+q.PW,cx1)-Math.max(q.X,cx0);
-          const oy=Math.min(q.Y+q.PH,cy1)-Math.max(q.Y,cy0);
-          const a=(ox>0&&oy>0)?ox*oy:0;
-          if(a>0&&(!best||a>best.a))best={a,c};
-        });
-        if(best)q.cid=best.c.id;
-      });
-    }
-    geo.forEach(q=>{
-      if(q.cid<0)return;
-      const c=A.comps.find(x=>x.id===q.cid);
-      if(!c)return;
-      q.X=c.x0/A.sc;q.Y=c.y0/A.sc;q.PW=(c.x1-c.x0)/A.sc;q.PH=(c.y1-c.y0)/A.sc;
+    let ok=true;
+    (t.panels||[]).forEach((pn,j)=>{
+      const c=ord[pn.read-1];
+      if(!c){ok=false;return;}
+      geo[j].cid=c.id;
+      geo[j].X=c.x0/A.sc;geo[j].Y=c.y0/A.sc;
+      geo[j].PW=(c.x1-c.x0)/A.sc;geo[j].PH=(c.y1-c.y0)/A.sc;
     });
+    if(ok)p.detOK=true;
+    else{A=null;geo.forEach((q,j)=>{
+      const pn=t.panels[j];
+      q.cid=-1;q.X=pn.r[0]/100*W;q.Y=pn.r[1]/100*H;q.PW=pn.r[2]/100*W;q.PH=pn.r[3]/100*H;});}
+  }else{
+    A=null;   /* 検出を使わない（以前と同じやり方に戻す） */
   }
 
   (t.panels||[]).forEach((pn,j)=>{
@@ -6285,6 +6282,43 @@ function renderChat(toBottom){
   const w=document.getElementById("chatWrap");
   if(w&&toBottom)w.scrollTop=w.scrollHeight;
 }
+/* コマ枠をどう読み取ったかを赤い線で見せる */
+async function showPanelDetect(i){
+  const p=P.pages[i];
+  const src=p&&(p.art||p.img);
+  if(!src){alert("このページにはまだ絵がありません。");return;}
+  const img=await loadImg(src);
+  const W=img.naturalWidth||img.width,H=img.naturalHeight||img.height;
+  const cv=document.createElement("canvas");cv.width=W;cv.height=H;
+  const ctx=cv.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(img,0,0,W,H);
+  let A=null;try{A=analyzePage(cv,W,H);}catch(e){}
+  const want=(TEMPLATES[p.tpl]||TEMPLATES[1]).panels.length;
+  const got=A?A.comps.length:0;
+  if(A)A.comps.forEach((c,k)=>{
+    const x=c.x0/A.sc,y=c.y0/A.sc,w=(c.x1-c.x0)/A.sc,h=(c.y1-c.y0)/A.sc;
+    ctx.save();
+    ctx.strokeStyle="#e23c1f";ctx.lineWidth=Math.max(3,W*0.005);
+    ctx.strokeRect(x,y,w,h);
+    ctx.fillStyle="#e23c1f";
+    const fs=Math.max(18,W*0.028);
+    ctx.font=`800 ${fs}px ${TXT_FONT}`;
+    ctx.fillRect(x,y,fs*1.6,fs*1.4);
+    ctx.fillStyle="#fff";ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.fillText(String(k+1),x+fs*0.8,y+fs*0.7);
+    ctx.restore();
+  });
+  previewText="";
+  document.getElementById("previewTitle").textContent=
+    `${i+1}ページ目のコマ枠の読み取り：${got}こ　（テンプレは${want}こ）${got===want?"　✓ 一致":"　✗ 合わないのでテンプレ位置を使います"}`;
+  const pb=document.getElementById("previewBody");
+  pb.innerHTML="";
+  const im=document.createElement("img");
+  im.src=cv.toDataURL("image/jpeg",0.9);
+  im.style.cssText="max-width:100%;height:auto;display:block;margin:0 auto;background:#fff";
+  pb.appendChild(im);
+  document.getElementById("previewOverlay").classList.add("on");
+}
 /* このページでAIに送っている指示をそのまま見せる */
 async function showPagePrompt(i){
   const p=P.pages[i];if(!p)return;
@@ -6346,11 +6380,13 @@ function renderDrawBox(keepStatus){
     <div class="pcard ${window.__drawing===i?"busy":""}">
       <div class="ph">${p.img?`<img src="${p.img}" onclick="showPageImage(${i})">`:(window.__drawing===i?"描いています…":"未作成")}</div>
       <div class="pb">
-        <div class="pn">${i+1}. ${esc((p.title||"").slice(0,12))||"（無題）"}</div>
+        <div class="pn">${i+1}. ${esc((p.title||"").slice(0,12))||"（無題）"}
+          ${p.art&&p.detN!==undefined?`<span style="font-size:10.5px;font-weight:400;color:${p.detOK?"#2f7a52":"#b4740f"}">　コマ枠 ${p.detN}/${TEMPLATES[p.tpl].panels.length}${p.detOK?"":"（テンプレ位置）"}</span>`:""}</div>
         <div class="pa">
           <button class="btn sm" onclick="drawOne(${i})">${p.img?"作り直す":"作る"}</button>
           <button class="btn sm" onclick="setFixPage(${i})">直しを伝える</button>
           <button class="btn sm" onclick="showPagePrompt(${i})">指示を見る</button>
+          ${p.art?`<button class="btn sm" onclick="showPanelDetect(${i})">コマ枠を見る</button>`:""}
           ${p.art?`<button class="btn sm" onclick="recomposeOne(${i})">文字を入れ直す</button>`
             :(p.img?`<button class="btn sm" onclick="drawOne(${i},true)">文字を直す</button>`:"")}
           ${p.img?`<button class="btn sm" onclick="showPageImage(${i})">大きく</button>`:""}
