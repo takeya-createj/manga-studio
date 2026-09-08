@@ -5641,178 +5641,231 @@ function loadImg(src){
     const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("絵を読み込めません"));im.src=src;
   });
 }
-/* 絵から実際のコマ枠を見つける（コマ間の白い余白で切る） */
-function detectPanels(srcCanvas,W,H){
-  const SW=Math.min(420,W);
-  const sc=SW/W, SH=Math.max(1,Math.round(H*sc));
-  const cv=document.createElement("canvas");cv.width=SW;cv.height=SH;
-  const g=cv.getContext("2d",{willReadFrequently:true});
-  g.drawImage(srcCanvas,0,0,SW,SH);
-  let dd;
-  try{dd=g.getImageData(0,0,SW,SH).data;}catch(e){return null;}
-  const ink=new Uint8Array(SW*SH);
-  for(let y=0;y<SH;y++)for(let x=0;x<SW;x++){
-    const i=(y*SW+x)*4;
-    const L=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];
-    ink[y*SW+x]=L<232?1:0;
-  }
-  const EPS=0.012, minGut=Math.max(2,Math.round(Math.min(SW,SH)*0.010));
-  const inkRow=(y,x0,x1)=>{let c=0;for(let x=x0;x<x1;x++)c+=ink[y*SW+x];return c/Math.max(1,x1-x0);};
-  const inkCol=(x,y0,y1)=>{let c=0;for(let y=y0;y<y1;y++)c+=ink[y*SW+x];return c/Math.max(1,y1-y0);};
-  function bands(a,b,f){
-    const out=[];let st=-1;
-    for(let k=a;k<b;k++){
-      if(f(k)<=EPS){if(st<0)st=k;}
-      else{if(st>=0&&k-st>=minGut)out.push([st,k]);st=-1;}
-    }
-    if(st>=0&&b-st>=minGut)out.push([st,b]);
-    return out;
-  }
-  function trim(r){
-    let x0=r[0],y0=r[1],x1=r[2],y1=r[3];
-    while(y0<y1&&inkRow(y0,x0,x1)<=EPS)y0++;
-    while(y1>y0&&inkRow(y1-1,x0,x1)<=EPS)y1--;
-    while(x0<x1&&inkCol(x0,y0,y1)<=EPS)x0++;
-    while(x1>x0&&inkCol(x1-1,y0,y1)<=EPS)x1--;
-    return [x0,y0,x1,y1];
-  }
-  const out=[];
-  function split(r,depth){
-    r=trim(r);
-    const x0=r[0],y0=r[1],x1=r[2],y1=r[3];
-    if(x1-x0<SW*0.07||y1-y0<SH*0.05||depth>6){if(x1>x0&&y1>y0)out.push(r);return;}
-    let hb=bands(y0+1,y1-1,k=>inkRow(k,x0,x1)).filter(b=>b[0]>y0&&b[1]<y1);
-    if(hb.length){
-      let prev=y0;
-      hb.forEach(b=>{if(b[0]-prev>SH*0.04)split([x0,prev,x1,b[0]],depth+1);prev=b[1];});
-      if(y1-prev>SH*0.04)split([x0,prev,x1,y1],depth+1);
-      return;
-    }
-    let vb=bands(x0+1,x1-1,k=>inkCol(k,y0,y1)).filter(b=>b[0]>x0&&b[1]<x1);
-    if(vb.length){
-      let prev=x0;
-      vb.forEach(b=>{if(b[0]-prev>SW*0.05)split([prev,y0,b[0],y1],depth+1);prev=b[1];});
-      if(x1-prev>SW*0.05)split([prev,y0,x1,y1],depth+1);
-      return;
-    }
-    out.push(r);
-  }
-  split([0,0,SW,SH],0);
-  return out.map(r=>[r[0]/sc,r[1]/sc,r[2]/sc,r[3]/sc]);
+/* ===== ページの解析 =====
+   紙の縁から白いところを塗りつぶすと、コマとコマの間（ガター）だけが塗られる。
+   塗られなかった場所のかたまり＝コマの内側。斜めのコマ割りでも正しく取れる。 */
+function integral(GW,GH,arr){
+  const I=new Float64Array((GW+1)*(GH+1));
+  for(let y=0;y<GH;y++)for(let x=0;x<GW;x++)
+    I[(y+1)*(GW+1)+x+1]=arr[y*GW+x]+I[y*(GW+1)+x+1]+I[(y+1)*(GW+1)+x]-I[y*(GW+1)+x];
+  return I;
 }
-/* 日本式の読み順（上から下、各段は右から左）に並べる */
-function orderPanels(rects){
-  const rs=rects.slice().sort((a,b)=>a[1]-b[1]);
-  const rows=[];
+function rectMean(I,GW,GH,x0,y0,x1,y1){
+  const a=Math.max(0,Math.min(GW,Math.floor(x0))),b=Math.max(0,Math.min(GH,Math.floor(y0)));
+  const c=Math.max(0,Math.min(GW,Math.ceil(x1))),e=Math.max(0,Math.min(GH,Math.ceil(y1)));
+  if(c<=a||e<=b)return 0;
+  return (I[e*(GW+1)+c]-I[b*(GW+1)+c]-I[e*(GW+1)+a]+I[b*(GW+1)+a])/((c-a)*(e-b));
+}
+function analyzePage(srcCanvas,W,H){
+  const GW=Math.min(200,W),sc=GW/W,GH=Math.max(1,Math.round(H*sc));
+  const cv=document.createElement("canvas");cv.width=GW;cv.height=GH;
+  const g=cv.getContext("2d",{willReadFrequently:true});
+  g.drawImage(srcCanvas,0,0,GW,GH);
+  let dd;try{dd=g.getImageData(0,0,GW,GH).data;}catch(e){return null;}
+  const n=GW*GH,L=new Float32Array(n),ink=new Uint8Array(n);
+  for(let k=0;k<n;k++){const i=k*4;L[k]=0.299*dd[i]+0.587*dd[i+1]+0.114*dd[i+2];ink[k]=L[k]<234?1:0;}
+
+  /* 縁から塗りつぶして「コマの外」を求める */
+  const out=new Uint8Array(n),st=[];
+  for(let x=0;x<GW;x++){st.push(x);st.push((GH-1)*GW+x);}
+  for(let y=0;y<GH;y++){st.push(y*GW);st.push(y*GW+GW-1);}
+  while(st.length){
+    const k=st.pop();
+    if(out[k]||ink[k])continue;
+    out[k]=1;
+    const x=k%GW,y=(k-x)/GW;
+    if(x>0)st.push(k-1);
+    if(x<GW-1)st.push(k+1);
+    if(y>0)st.push(k-GW);
+    if(y<GH-1)st.push(k+GW);
+  }
+  /* 枠線にもかからないよう、外側を2マス分広げる */
+  let cur=out;
+  for(let pass=0;pass<2;pass++){
+    const nx=new Uint8Array(cur);
+    for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
+      const k=y*GW+x;
+      if(cur[k])continue;
+      if((x>0&&cur[k-1])||(x<GW-1&&cur[k+1])||(y>0&&cur[k-GW])||(y<GH-1&&cur[k+GW]))nx[k]=1;
+    }
+    cur=nx;
+  }
+  const outside=cur;
+
+  /* 内側のかたまり＝コマ */
+  const comp=new Int16Array(n).fill(-1),comps=[];
+  for(let k0=0;k0<n;k0++){
+    if(outside[k0]||comp[k0]>=0)continue;
+    const id=comps.length,q=[k0];comp[k0]=id;
+    let x0=1e9,y0=1e9,x1=-1,y1=-1,cells=0;
+    while(q.length){
+      const k=q.pop();cells++;
+      const x=k%GW,y=(k-x)/GW;
+      if(x<x0)x0=x;
+      if(x>x1)x1=x;
+      if(y<y0)y0=y;
+      if(y>y1)y1=y;
+      if(x>0&&!outside[k-1]&&comp[k-1]<0){comp[k-1]=id;q.push(k-1);}
+      if(x<GW-1&&!outside[k+1]&&comp[k+1]<0){comp[k+1]=id;q.push(k+1);}
+      if(y>0&&!outside[k-GW]&&comp[k-GW]<0){comp[k-GW]=id;q.push(k-GW);}
+      if(y<GH-1&&!outside[k+GW]&&comp[k+GW]<0){comp[k+GW]=id;q.push(k+GW);}
+    }
+    comps.push({id,x0,y0,x1:x1+1,y1:y1+1,cells});
+  }
+  const keep=comps.filter(c=>c.cells>=n*0.018);
+  if(!keep.length)return null;
+
+  /* 描き込み量（周りの明るさのばらつき） */
+  const det=new Float32Array(n);let mx=0;
+  for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
+    let a=0,a2=0,c=0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      const xx=x+dx,yy=y+dy;
+      if(xx<0||yy<0||xx>=GW||yy>=GH)continue;
+      const v=L[yy*GW+xx];a+=v;a2+=v*v;c++;
+    }
+    const m=a/c,k=y*GW+x;
+    det[k]=Math.sqrt(Math.max(0,a2/c-m*m));
+    if(det[k]>mx)mx=det[k];
+  }
+  if(mx>0)for(let k=0;k<n;k++)det[k]/=mx;
+
+  return {GW,GH,sc,comp,comps:keep,det,detI:integral(GW,GH,det),
+    maskI(id){
+      const m=new Float32Array(n);
+      for(let k=0;k<n;k++)m[k]=(this.comp[k]===id)?1:0;
+      return integral(this.GW,this.GH,m);
+    }};
+}
+/* 日本式の読み順（上から下、各段は右から左） */
+function orderComps(cs){
+  const rs=cs.slice().sort((a,b)=>a.y0-b.y0),rows=[];
   rs.forEach(r=>{
-    const h=r[3]-r[1];
+    const h=r.y1-r.y0;
     let row=null;
     for(const R of rows){
-      const ov=Math.min(R.y1,r[3])-Math.max(R.y0,r[1]);
+      const ov=Math.min(R.y1,r.y1)-Math.max(R.y0,r.y0);
       if(ov>Math.min(h,R.y1-R.y0)*0.45){row=R;break;}
     }
-    if(!row){row={y0:r[1],y1:r[3],items:[]};rows.push(row);}
-    row.y0=Math.min(row.y0,r[1]);row.y1=Math.max(row.y1,r[3]);
+    if(!row){row={y0:r.y0,y1:r.y1,items:[]};rows.push(row);}
+    row.y0=Math.min(row.y0,r.y0);row.y1=Math.max(row.y1,r.y1);
     row.items.push(r);
   });
   rows.sort((a,b)=>a.y0-b.y0);
   const o=[];
-  rows.forEach(R=>{R.items.sort((a,b)=>b[0]-a[0]);R.items.forEach(x=>o.push(x));});
+  rows.forEach(R=>{R.items.sort((a,b)=>b.x0-a.x0);R.items.forEach(x=>o.push(x));});
   return o;
 }
-/* 絵の「描き込み量」をマス目で測る（顔や人物は高、空や壁は低） */
-function buildDetail(ctx,X,Y,PW,PH){
-  const gx=26,gy=Math.max(8,Math.min(44,Math.round(26*PH/Math.max(1,PW))));
-  let img;
-  try{
-    img=ctx.getImageData(Math.max(0,Math.round(X)),Math.max(0,Math.round(Y)),
-                         Math.max(1,Math.round(PW)),Math.max(1,Math.round(PH)));
-  }catch(e){return null;}
-  const W=img.width,H=img.height,dd=img.data;
-  const step=Math.max(1,Math.round(Math.min(W,H)/140));
-  const n=gx*gy,sum=new Float64Array(n),sq=new Float64Array(n),cnt=new Float64Array(n);
-  for(let y=0;y<H;y+=step)for(let x=0;x<W;x+=step){
-    const k4=(y*W+x)*4;
-    const L=0.299*dd[k4]+0.587*dd[k4+1]+0.114*dd[k4+2];
-    const ci=Math.min(gx-1,Math.floor(x/W*gx)),cj=Math.min(gy-1,Math.floor(y/H*gy));
-    const k=cj*gx+ci;sum[k]+=L;sq[k]+=L*L;cnt[k]++;
-  }
-  const det=new Float64Array(n);
-  let mx=0;
-  for(let k=0;k<n;k++){
-    if(!cnt[k]){det[k]=0;continue;}
-    const m=sum[k]/cnt[k];
-    det[k]=Math.sqrt(Math.max(0,sq[k]/cnt[k]-m*m));
-    if(det[k]>mx)mx=det[k];
-  }
-  if(mx>0)for(let k=0;k<n;k++)det[k]/=mx;
-  const I=new Float64Array((gx+1)*(gy+1));
-  for(let j=0;j<gy;j++)for(let i2=0;i2<gx;i2++)
-    I[(j+1)*(gx+1)+i2+1]=det[j*gx+i2]+I[j*(gx+1)+i2+1]+I[(j+1)*(gx+1)+i2]-I[j*(gx+1)+i2];
-  return {gx,gy,X,Y,PW,PH,det,
-    /* パネル内の相対座標(px)で平均描き込み量を返す */
-    rect(x0,y0,x1,y1){
-      const a=Math.max(0,Math.min(gx,Math.floor(x0/PW*gx))),b=Math.max(0,Math.min(gy,Math.floor(y0/PH*gy)));
-      const c=Math.max(0,Math.min(gx,Math.ceil(x1/PW*gx))),e=Math.max(0,Math.min(gy,Math.ceil(y1/PH*gy)));
-      if(c<=a||e<=b)return 1;
-      return (I[e*(gx+1)+c]-I[b*(gx+1)+c]-I[e*(gx+1)+a]+I[b*(gx+1)+a])/((c-a)*(e-b));
-    }};
-}
-/* 描き込みの少ない場所を探す。候補は必ず使える範囲(U)の内側だけ */
-function placeBox(dm,bw,bh,idealCx,idealCy,taken,U,opt){
+/* 置く場所を探す。コマの内側かどうかを最優先で見る */
+function placeBox(A,ctxMask,bw,bh,idealCx,idealCy,taken,U,opt){
   opt=opt||{};
   const spanX=Math.max(0,U.w-bw),spanY=Math.max(0,U.h-bh);
-  const nx=spanX>1?24:0,ny=spanY>1?24:0;
+  const nx=spanX>1?26:0,ny=spanY>1?26:0;
   let best=null,bestFree=null;
   for(let sy=0;sy<=ny;sy++)for(let sx=0;sx<=nx;sx++){
     const cx=U.x+bw/2+(nx?spanX*sx/nx:spanX/2);
     const cy=U.y+bh/2+(ny?spanY*sy/ny:spanY/2);
-    let sc=(dm?dm.rect(cx-bw/2-dm.X,cy-bh/2-dm.Y,cx+bw/2-dm.X,cy+bh/2-dm.Y):0)*7.5;
+    let sc=0;
+    if(A&&ctxMask){
+      const gx0=(cx-bw/2)*A.sc,gy0=(cy-bh/2)*A.sc,gx1=(cx+bw/2)*A.sc,gy1=(cy+bh/2)*A.sc;
+      const ins=rectMean(ctxMask,A.GW,A.GH,gx0,gy0,gx1,gy1);
+      sc+=(1-ins)*60;                                    /* はみ出しは致命的 */
+      sc+=rectMean(A.detI,A.GW,A.GH,gx0,gy0,gx1,gy1)*8;  /* 顔や人物を避ける */
+    }
     const dx=(cx-idealCx)/Math.max(1,U.w),dy=(cy-idealCy)/Math.max(1,U.h);
-    sc+=Math.sqrt(dx*dx+dy*dy)*0.62;
-    if(opt.top)sc+=((cy-U.y)/Math.max(1,U.h))*0.40;
-    if(opt.bottom)sc+=(1-(cy-U.y)/Math.max(1,U.h))*0.40;
+    sc+=Math.sqrt(dx*dx+dy*dy)*0.55;
+    if(opt.top)sc+=((cy-U.y)/Math.max(1,U.h))*0.35;
+    if(opt.bottom)sc+=(1-(cy-U.y)/Math.max(1,U.h))*0.35;
     let ov=0;
     for(const t of taken){
       const ox=Math.min(cx+bw/2,t.x1)-Math.max(cx-bw/2,t.x0);
       const oy=Math.min(cy+bh/2,t.y1)-Math.max(cy-bh/2,t.y0);
       if(ox>0&&oy>0)ov+=(ox*oy)/(bw*bh);
     }
-    sc+=ov*8;
+    sc+=ov*10;
     const cand={sc,cx,cy};
     if(!best||sc<best.sc)best=cand;
     if(opt.maxCx===undefined||cx<=opt.maxCx){if(!bestFree||sc<bestFree.sc)bestFree=cand;}
   }
   const r=bestFree||best||{cx:U.x+U.w/2,cy:U.y+U.h/2};
-  /* 最後に必ずコマの内側へ押し込む */
   r.cx=Math.max(U.x+bw/2,Math.min(U.x+U.w-bw/2,r.cx));
   r.cy=Math.max(U.y+bh/2,Math.min(U.y+U.h-bh/2,r.cy));
   return r;
 }
-/* しっぽの向き：一番描き込まれている場所（＝人物）を指す */
-function tailTarget(dm,cx,cy,bw,bh,U){
-  const fall={tx:cx,ty:Math.min(U.y+U.h,cy+bh*0.78)};
-  if(!dm)return fall;
+/* しっぽは、同じコマの中で一番描き込まれている場所（＝人物）を指す */
+function tailTarget(A,cid,cx,cy,bw,bh,U){
+  const fall={tx:cx,ty:Math.min(U.y+U.h,cy+bh*0.72)};
+  if(!A)return fall;
   let best=null;
-  for(let j=0;j<dm.gy;j++)for(let i=0;i<dm.gx;i++){
-    const px=dm.X+(i+0.5)/dm.gx*dm.PW,py=dm.Y+(j+0.5)/dm.gy*dm.PH;
-    if(py<cy+bh*0.10)continue;                       /* 真上には向けない */
-    const dx=(px-cx)/dm.PW,dy=(py-cy)/dm.PH;
-    const sc=dm.det[j*dm.gx+i]-Math.sqrt(dx*dx+dy*dy)*0.75;
+  for(let gy=0;gy<A.GH;gy++)for(let gx=0;gx<A.GW;gx++){
+    const k=gy*A.GW+gx;
+    if(A.comp[k]!==cid)continue;
+    const px=(gx+0.5)/A.sc,py=(gy+0.5)/A.sc;
+    if(py<cy+bh*0.10)continue;
+    const dx=(px-cx)/Math.max(1,U.w),dy=(py-cy)/Math.max(1,U.h);
+    const sc=A.det[k]-Math.sqrt(dx*dx+dy*dy)*0.75;
     if(!best||sc>best.sc)best={sc,px,py};
   }
   if(!best)return fall;
   let ang=Math.atan2(best.py-cy,best.px-cx);
-  const lim=0.30;                                    /* 横を向きすぎない */
+  const lim=0.30;
   if(ang<lim)ang=lim;
   if(ang>Math.PI-lim)ang=Math.PI-lim;
   const d=Math.sqrt((best.px-cx)*(best.px-cx)+(best.py-cy)*(best.py-cy));
-  const big=Math.max(bw,bh);
-  const len=Math.max(big*0.62,Math.min(d,big*1.00));
+  const big=Math.max(bw,bh),len=Math.max(big*0.62,Math.min(d,big*1.0));
   let tx=cx+Math.cos(ang)*len,ty=cy+Math.sin(ang)*len;
   tx=Math.max(U.x+2,Math.min(U.x+U.w-2,tx));
   ty=Math.max(U.y+2,Math.min(U.y+U.h-2,ty));
   return {tx,ty};
+}
+function drawBubble(ctx,cx,cy,rw,rh,tx,ty,kind){
+  const lw=Math.max(2,rw*0.045);
+  ctx.save();
+  ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=lw;ctx.lineJoin="round";
+  ctx.beginPath();
+  if(kind==="thought"){
+    const n=20;
+    ctx.moveTo(cx+rw,cy);
+    for(let i=1;i<=n;i++){
+      const a0=(i-1)/n*Math.PI*2,a1=i/n*Math.PI*2,am=(a0+a1)/2,bul=1.16;
+      ctx.quadraticCurveTo(cx+rw*bul*Math.cos(am),cy+rh*bul*Math.sin(am),
+                           cx+rw*Math.cos(a1),cy+rh*Math.sin(a1));
+    }
+    ctx.closePath();
+  }else if(kind==="shout"){
+    const n=24;
+    for(let i=0;i<n;i++){
+      const a=i/n*Math.PI*2,wob=(i%2?1.16:0.95);
+      const x=cx+rw*wob*Math.cos(a),y=cy+rh*wob*Math.sin(a);
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    }
+    ctx.closePath();
+  }else{
+    ctx.ellipse(cx,cy,rw,rh,0,0,Math.PI*2);
+  }
+  ctx.fill();ctx.stroke();
+  if(tx!==undefined){
+    const a=Math.atan2((ty-cy)/rh,(tx-cx)/rw),sp=0.26;
+    const p1x=cx+rw*Math.cos(a-sp),p1y=cy+rh*Math.sin(a-sp);
+    const p2x=cx+rw*Math.cos(a+sp),p2y=cy+rh*Math.sin(a+sp);
+    if(kind==="thought"){
+      for(let i=1;i<=2;i++){
+        const t=i/2.6,r=rw*0.14/i;
+        ctx.beginPath();ctx.ellipse(cx+(tx-cx)*t,cy+(ty-cy)*t,r,r,0,0,Math.PI*2);
+        ctx.fill();ctx.stroke();
+      }
+    }else{
+      ctx.beginPath();ctx.moveTo(p1x,p1y);ctx.lineTo(tx,ty);ctx.lineTo(p2x,p2y);ctx.closePath();
+      ctx.fillStyle="#fff";ctx.fill();
+      ctx.beginPath();ctx.moveTo(p1x,p1y);ctx.lineTo(tx,ty);ctx.lineTo(p2x,p2y);ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function loadImg(src){
+  return new Promise((res,rej)=>{
+    const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("絵を読み込めません"));im.src=src;
+  });
 }
 async function composeText(i){
   const p=P.pages[i];
@@ -5824,42 +5877,53 @@ async function composeText(i){
   ctx.drawImage(img,0,0,W,H);
   const t=TEMPLATES[p.tpl]||TEMPLATES[1];
 
-  /* 絵から実際のコマ枠を探す。見つからなければテンプレの位置を使う */
-  let boxes=null;
-  try{
-    const det=detectPanels(cv,W,H);
-    if(det&&det.length===(t.panels||[]).length){
-      const ord=orderPanels(det);
-      boxes=[];
-      (t.panels||[]).forEach((pn,j)=>{boxes[j]=ord[pn.read-1]||null;});
-      if(boxes.some(b=>!b))boxes=null;
-    }
-  }catch(e){boxes=null;}
-  const geo=(t.panels||[]).map((pn,j)=>{
-    if(boxes)return {X:boxes[j][0],Y:boxes[j][1],PW:boxes[j][2]-boxes[j][0],PH:boxes[j][3]-boxes[j][1],fit:true};
-    return {X:pn.r[0]/100*W,Y:pn.r[1]/100*H,PW:pn.r[2]/100*W,PH:pn.r[3]/100*H,fit:false};
-  });
+  let A=null;
+  try{A=analyzePage(cv,W,H);}catch(e){A=null;}
 
-  /* 先に全コマの描き込み量を測る（文字を置く前の絵で測るため） */
-  const maps=geo.map(q=>buildDetail(ctx,q.X,q.Y,q.PW,q.PH));
+  /* テンプレのコマと、実際に描かれたコマを対応づける */
+  const geo=(t.panels||[]).map(pn=>({
+    X:pn.r[0]/100*W,Y:pn.r[1]/100*H,PW:pn.r[2]/100*W,PH:pn.r[3]/100*H,cid:-1
+  }));
+  if(A&&A.comps.length){
+    const ord=orderComps(A.comps);
+    if(ord.length===geo.length){
+      (t.panels||[]).forEach((pn,j)=>{const c=ord[pn.read-1];if(c)geo[j].cid=c.id;});
+    }else{
+      geo.forEach(q=>{
+        let best=null;
+        A.comps.forEach(c=>{
+          const cx0=c.x0/A.sc,cy0=c.y0/A.sc,cx1=c.x1/A.sc,cy1=c.y1/A.sc;
+          const ox=Math.min(q.X+q.PW,cx1)-Math.max(q.X,cx0);
+          const oy=Math.min(q.Y+q.PH,cy1)-Math.max(q.Y,cy0);
+          const a=(ox>0&&oy>0)?ox*oy:0;
+          if(a>0&&(!best||a>best.a))best={a,c};
+        });
+        if(best)q.cid=best.c.id;
+      });
+    }
+    geo.forEach(q=>{
+      if(q.cid<0)return;
+      const c=A.comps.find(x=>x.id===q.cid);
+      if(!c)return;
+      q.X=c.x0/A.sc;q.Y=c.y0/A.sc;q.PW=(c.x1-c.x0)/A.sc;q.PH=(c.y1-c.y0)/A.sc;
+    });
+  }
 
   (t.panels||[]).forEach((pn,j)=>{
-    const d=(p.panels||[])[j]||{},dm=maps[j],q=geo[j];
+    const d=(p.panels||[])[j]||{},q=geo[j];
     const X=q.X,Y=q.Y,PW=q.PW,PH=q.PH;
-    /* 枠線の内側に入れるための余白 */
-    const GUT=q.fit?Math.min(PW,PH)*0.055:Math.min(W,H)*0.045;
+    const mask=(A&&q.cid>=0)?A.maskI(q.cid):null;
+    const GUT=Math.min(PW,PH)*(q.cid>=0?0.030:0.055);
     const U={x:X+GUT,y:Y+GUT,w:Math.max(PW*0.30,PW-GUT*2),h:Math.max(PH*0.30,PH-GUT*2)};
     const taken=[];
     const put=(cx,cy,bw,bh)=>taken.push({x0:cx-bw/2,x1:cx+bw/2,y0:cy-bh/2,y1:cy+bh/2});
-    /* この範囲に必ず収まるまで小さくする */
     const boxShape=(pw,ph)=>f=>({bw:f.w+f.fs*pw,bh:f.h+f.fs*ph});
-    /* 吹き出し：文字の四角を楾円の内側に入れ、痩せすぎないよう縦横比を制限 */
-    const bubbleShape=(kd)=>f=>{
-      const k=kd==="shout"?1.22:1.32;          /* 丸みと文字の大きさの間を取る */
-      let bw=f.w*k+f.fs*0.60, bh=f.h*(k*0.94)+f.fs*0.55;
+    const bubbleShape=kd=>f=>{
+      const k=kd==="shout"?1.22:1.32;
+      let bw=f.w*k+f.fs*0.60,bh=f.h*(k*0.94)+f.fs*0.55;
       const r=bh/bw;
-      if(r>1.9)bw=bh/1.9;                       /* 縦長すぎを丸くする */
-      if(r<0.62)bh=bw*0.62;                     /* 平たすぎも丸くする */
+      if(r>1.9)bw=bh/1.9;
+      if(r<0.62)bh=bw*0.62;
       return {bw,bh};
     };
     const fitIn=(txt,maxFs,weight,shape)=>{
@@ -5875,17 +5939,16 @@ async function composeText(i){
       return {f,bw:Math.min(U.w,sz.bw),bh:Math.min(U.h,sz.bh)};
     };
 
-    /* ナレーション：四角い枠 */
+    /* ナレーション */
     const nar=(d.narration||"").trim();
     if(nar){
       const r=fitIn(breakCommas(nar),Math.min(U.h*0.070,U.w*0.055,34),600,boxShape(0.85,0.85));
       const f=r.f;
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
-      const pos=placeBox(dm,r.bw,r.bh,U.x+r.bw/2,U.y+r.bh/2,taken,U,{top:true});
-      const bx=pos.cx-r.bw/2,by=pos.cy-r.bh/2;
+      const pos=placeBox(A,mask,r.bw,r.bh,U.x+r.bw/2,U.y+r.bh/2,taken,U,{top:true});
+      const bx=pos.cx-r.bw/2,by=pos.cy-r.bh/2,rr=Math.min(r.bw,r.bh)*0.13;
       ctx.save();
       ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=Math.max(2,f.fs*0.09);
-      const rr=Math.min(r.bw,r.bh)*0.13;
       ctx.beginPath();
       if(ctx.roundRect)ctx.roundRect(bx,by,r.bw,r.bh,rr);
       else{ctx.moveTo(bx+rr,by);ctx.lineTo(bx+r.bw-rr,by);ctx.quadraticCurveTo(bx+r.bw,by,bx+r.bw,by+rr);
@@ -5899,33 +5962,32 @@ async function composeText(i){
       put(pos.cx,pos.cy,r.bw,r.bh);
     }
 
-    /* セリフ：右から左へ。顔や人物を避けて置く */
+    /* セリフ */
     const lines=(d.lines||[]).filter(l=>l&&l.text&&l.text.trim());
     if(lines.length){
       const base=Math.min(U.h*0.100,U.w*0.078,40);
-      const build=sc=>lines.map(l=>{
+      const build=sc2=>lines.map(l=>{
         const kd=l.kind||"normal";
         const mag=kd==="shout"?1.16:(kd==="small"?0.82:1);
         const txt=breakCommas(String(l.text).replace(/^\u300c|\u300d$/g,""));
-        const r=fitIn(txt,Math.max(11,base*sc*mag),kd==="shout"?800:700,bubbleShape(kd));
+        const r=fitIn(txt,Math.max(11,base*sc2*mag),kd==="shout"?800:700,bubbleShape(kd));
         return {kd,f:r.f,bw:r.bw,bh:r.bh,rw:r.bw/2,rh:r.bh/2};
       });
       let items=null;
-      for(let sc=1;sc>=0.44;sc-=0.07){
-        const it=build(sc);
+      for(let sc2=1;sc2>=0.44;sc2-=0.07){
+        const it=build(sc2);
         const total=it.reduce((a,x)=>a+x.bw,0)+Math.min(U.w,U.h)*0.035*(it.length-1);
         const tall=Math.max.apply(null,it.map(x=>x.bh));
         if(total<=U.w&&tall<=U.h*0.86){items=it;break;}
       }
       if(!items)items=build(0.44);
-
       let prevCx;
       items.forEach((it,k)=>{
         const idealCx=U.x+U.w-it.rw-k*(U.w/items.length)*0.92;
         const idealCy=U.y+it.rh;
-        const pos=placeBox(dm,it.bw,it.bh,idealCx,idealCy,taken,U,
+        const pos=placeBox(A,mask,it.bw,it.bh,idealCx,idealCy,taken,U,
                            {top:true,maxCx:(prevCx!==undefined?prevCx-it.bw*0.10:undefined)});
-        const tt=tailTarget(dm,pos.cx,pos.cy,it.bw,it.bh,U);
+        const tt=tailTarget(A,q.cid,pos.cx,pos.cy,it.bw,it.bh,U);
         drawBubble(ctx,pos.cx,pos.cy,it.rw,it.rh,tt.tx,tt.ty,it.kd);
         ctx.save();ctx.fillStyle="#111";
         ctx.font=`${it.f.weight} ${it.f.fs}px ${TXT_FONT}`;
@@ -5936,14 +5998,14 @@ async function composeText(i){
       });
     }
 
-    /* オノマトペ：白抜きの太字 */
+    /* オノマトペ */
     const ono=(d.ono||"").trim();
     if(ono){
       const r=fitIn(ono,Math.min(U.h*0.17,U.w*0.14,64),800,boxShape(0.4,0.4));
       const f=r.f;
       ctx.save();
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
-      const pos=placeBox(dm,r.bw,r.bh,U.x+r.bw/2,U.y+U.h-r.bh/2,taken,U,{bottom:true});
+      const pos=placeBox(A,mask,r.bw,r.bh,U.x+r.bw/2,U.y+U.h-r.bh/2,taken,U,{bottom:true});
       ctx.lineWidth=Math.max(3,f.fs*0.20);ctx.strokeStyle="#fff";ctx.lineJoin="round";
       ctx.textAlign="center";ctx.textBaseline="middle";
       const rx=pos.cx+f.w/2,ty2=pos.cy-f.h/2;
