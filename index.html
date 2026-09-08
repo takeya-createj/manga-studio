@@ -405,6 +405,19 @@ pre.preview{background:#26241f;color:#e8e3d6;padding:16px;border-radius:8px;over
   font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap}
 #drawBar button:hover{background:#a5301c}
 #drawBar button[disabled]{background:#6b625a;cursor:default}
+.fixtalk{border:2px solid #b4740f;border-radius:10px;background:#fdf7ec;padding:14px;margin-top:14px}
+.fixtalk h3{font-family:var(--display);font-size:13.5px;font-weight:800;color:#8a5a0b;margin-bottom:8px}
+.fixtalk textarea{width:100%;min-height:76px;font-size:13px;line-height:1.7;padding:9px 11px;
+  border:1px solid #d9c79c;border-radius:8px;background:#fff;font-family:inherit;resize:vertical}
+.fixtalk .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:9px}
+.fixtalk label.sc{display:inline-flex;gap:5px;align-items:center;font-size:12px;cursor:pointer;
+  border:1px solid #d9c79c;background:#fff;border-radius:20px;padding:5px 11px}
+.fixtalk label.sc input{width:auto;margin:0}
+.fixlog{margin-top:11px;border-top:1px dashed #d9c79c;padding-top:9px}
+.fixlog .it{font-size:12px;line-height:1.75;padding:5px 0;border-bottom:1px dotted #e5d9bd;
+  display:flex;gap:8px;align-items:flex-start}
+.fixlog .it b{flex:0 0 auto;font-size:10.5px;padding:2px 7px;border-radius:4px;background:#8a5a0b;color:#fff;margin-top:2px}
+.fixlog .it .rm{margin-left:auto;flex:0 0 auto;cursor:pointer;color:var(--ink-3);font-size:11px;border:0;background:none}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);margin-bottom:12px}
 .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 .fixrow{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line-2)}
@@ -5079,6 +5092,7 @@ function pageRedoPrompt(i){
   const p=P.pages[i];
   let s2=harnessPagePrompt(i);
   const fixes=[];
+  (p.fixLog||[]).forEach(f=>{if(!f.done)fixes.push(f.text);});
   (p.panels||[]).forEach((d,j)=>(d.fixes||[]).forEach(f=>{if(!f.done)fixes.push(`${MARU[j+1]} ${f.text}`);}));
   if(fixes.length){
     s2+=`\n\n■ 前回からの直し（必ず反映すること）\n`;
@@ -5561,77 +5575,203 @@ function loadImg(src){
     const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("絵を読み込めません"));im.src=src;
   });
 }
+/* 絵の「描き込み量」をマス目で測る（顔や人物は高、空や壁は低） */
+function buildDetail(ctx,X,Y,PW,PH){
+  const gx=26,gy=Math.max(8,Math.min(44,Math.round(26*PH/Math.max(1,PW))));
+  let img;
+  try{
+    img=ctx.getImageData(Math.max(0,Math.round(X)),Math.max(0,Math.round(Y)),
+                         Math.max(1,Math.round(PW)),Math.max(1,Math.round(PH)));
+  }catch(e){return null;}
+  const W=img.width,H=img.height,dd=img.data;
+  const step=Math.max(1,Math.round(Math.min(W,H)/140));
+  const n=gx*gy,sum=new Float64Array(n),sq=new Float64Array(n),cnt=new Float64Array(n);
+  for(let y=0;y<H;y+=step)for(let x=0;x<W;x+=step){
+    const k4=(y*W+x)*4;
+    const L=0.299*dd[k4]+0.587*dd[k4+1]+0.114*dd[k4+2];
+    const ci=Math.min(gx-1,Math.floor(x/W*gx)),cj=Math.min(gy-1,Math.floor(y/H*gy));
+    const k=cj*gx+ci;sum[k]+=L;sq[k]+=L*L;cnt[k]++;
+  }
+  const det=new Float64Array(n);
+  let mx=0;
+  for(let k=0;k<n;k++){
+    if(!cnt[k]){det[k]=0;continue;}
+    const m=sum[k]/cnt[k];
+    det[k]=Math.sqrt(Math.max(0,sq[k]/cnt[k]-m*m));
+    if(det[k]>mx)mx=det[k];
+  }
+  if(mx>0)for(let k=0;k<n;k++)det[k]/=mx;
+  const I=new Float64Array((gx+1)*(gy+1));
+  for(let j=0;j<gy;j++)for(let i2=0;i2<gx;i2++)
+    I[(j+1)*(gx+1)+i2+1]=det[j*gx+i2]+I[j*(gx+1)+i2+1]+I[(j+1)*(gx+1)+i2]-I[j*(gx+1)+i2];
+  return {gx,gy,X,Y,PW,PH,det,
+    /* パネル内の相対座標(px)で平均描き込み量を返す */
+    rect(x0,y0,x1,y1){
+      const a=Math.max(0,Math.min(gx,Math.floor(x0/PW*gx))),b=Math.max(0,Math.min(gy,Math.floor(y0/PH*gy)));
+      const c=Math.max(0,Math.min(gx,Math.ceil(x1/PW*gx))),e=Math.max(0,Math.min(gy,Math.ceil(y1/PH*gy)));
+      if(c<=a||e<=b)return 1;
+      return (I[e*(gx+1)+c]-I[b*(gx+1)+c]-I[e*(gx+1)+a]+I[b*(gx+1)+a])/((c-a)*(e-b));
+    }};
+}
+/* 描き込みの少ない場所を探す。候補は必ず使える範囲(U)の内側だけ */
+function placeBox(dm,bw,bh,idealCx,idealCy,taken,U,opt){
+  opt=opt||{};
+  const spanX=Math.max(0,U.w-bw),spanY=Math.max(0,U.h-bh);
+  const nx=spanX>1?18:0,ny=spanY>1?18:0;
+  let best=null,bestFree=null;
+  for(let sy=0;sy<=ny;sy++)for(let sx=0;sx<=nx;sx++){
+    const cx=U.x+bw/2+(nx?spanX*sx/nx:spanX/2);
+    const cy=U.y+bh/2+(ny?spanY*sy/ny:spanY/2);
+    let sc=(dm?dm.rect(cx-bw/2-dm.X,cy-bh/2-dm.Y,cx+bw/2-dm.X,cy+bh/2-dm.Y):0)*4.4;
+    const dx=(cx-idealCx)/Math.max(1,U.w),dy=(cy-idealCy)/Math.max(1,U.h);
+    sc+=Math.sqrt(dx*dx+dy*dy)*0.85;
+    if(opt.top)sc+=((cy-U.y)/Math.max(1,U.h))*0.55;
+    if(opt.bottom)sc+=(1-(cy-U.y)/Math.max(1,U.h))*0.55;
+    let ov=0;
+    for(const t of taken){
+      const ox=Math.min(cx+bw/2,t.x1)-Math.max(cx-bw/2,t.x0);
+      const oy=Math.min(cy+bh/2,t.y1)-Math.max(cy-bh/2,t.y0);
+      if(ox>0&&oy>0)ov+=(ox*oy)/(bw*bh);
+    }
+    sc+=ov*8;
+    const cand={sc,cx,cy};
+    if(!best||sc<best.sc)best=cand;
+    if(opt.maxCx===undefined||cx<=opt.maxCx){if(!bestFree||sc<bestFree.sc)bestFree=cand;}
+  }
+  const r=bestFree||best||{cx:U.x+U.w/2,cy:U.y+U.h/2};
+  /* 最後に必ずコマの内側へ押し込む */
+  r.cx=Math.max(U.x+bw/2,Math.min(U.x+U.w-bw/2,r.cx));
+  r.cy=Math.max(U.y+bh/2,Math.min(U.y+U.h-bh/2,r.cy));
+  return r;
+}
+/* しっぽの向き：一番描き込まれている場所（＝人物）を指す */
+function tailTarget(dm,cx,cy,bw,bh,U){
+  const fall={tx:cx,ty:Math.min(U.y+U.h,cy+bh*0.78)};
+  if(!dm)return fall;
+  let best=null;
+  for(let j=0;j<dm.gy;j++)for(let i=0;i<dm.gx;i++){
+    const px=dm.X+(i+0.5)/dm.gx*dm.PW,py=dm.Y+(j+0.5)/dm.gy*dm.PH;
+    if(py<cy+bh*0.10)continue;                       /* 真上には向けない */
+    const dx=(px-cx)/dm.PW,dy=(py-cy)/dm.PH;
+    const sc=dm.det[j*dm.gx+i]-Math.sqrt(dx*dx+dy*dy)*0.75;
+    if(!best||sc>best.sc)best={sc,px,py};
+  }
+  if(!best)return fall;
+  let ang=Math.atan2(best.py-cy,best.px-cx);
+  const lim=0.30;                                    /* 横を向きすぎない */
+  if(ang<lim)ang=lim;
+  if(ang>Math.PI-lim)ang=Math.PI-lim;
+  const d=Math.sqrt((best.px-cx)*(best.px-cx)+(best.py-cy)*(best.py-cy));
+  const big=Math.max(bw,bh);
+  const len=Math.max(big*0.62,Math.min(d,big*1.00));
+  let tx=cx+Math.cos(ang)*len,ty=cy+Math.sin(ang)*len;
+  tx=Math.max(U.x+2,Math.min(U.x+U.w-2,tx));
+  ty=Math.max(U.y+2,Math.min(U.y+U.h-2,ty));
+  return {tx,ty};
+}
 async function composeText(i){
   const p=P.pages[i];
   if(!p||!p.art)return null;
   const img=await loadImg(p.art);
   const W=img.naturalWidth||img.width,H=img.naturalHeight||img.height;
   const cv=document.createElement("canvas");cv.width=W;cv.height=H;
-  const ctx=cv.getContext("2d");
+  const ctx=cv.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(img,0,0,W,H);
   const t=TEMPLATES[p.tpl]||TEMPLATES[1];
-  (t.panels||[]).forEach((pn,j)=>{
-    const d=(p.panels||[])[j]||{};
-    const X=pn.r[0]/100*W,Y=pn.r[1]/100*H,PW=pn.r[2]/100*W,PH=pn.r[3]/100*H;
-    const pad=Math.min(PW,PH)*0.04;
-    let leftUsed=0;
 
-    /* ナレーション：左上の角に四角い枠 */
+  /* 先に全コマの描き込み量を測る（文字を置く前の絵で測るため） */
+  const maps=(t.panels||[]).map(pn=>
+    buildDetail(ctx,pn.r[0]/100*W,pn.r[1]/100*H,pn.r[2]/100*W,pn.r[3]/100*H));
+
+  /* コマとコマの間の余白（ガター）。ここには絶対に置かない */
+  const GUT=Math.min(W,H)*0.045;
+
+  (t.panels||[]).forEach((pn,j)=>{
+    const d=(p.panels||[])[j]||{},dm=maps[j];
+    const X=pn.r[0]/100*W,Y=pn.r[1]/100*H,PW=pn.r[2]/100*W,PH=pn.r[3]/100*H;
+    /* 実際に使ってよい範囲 */
+    const U={x:X+GUT,y:Y+GUT,w:Math.max(PW*0.30,PW-GUT*2),h:Math.max(PH*0.30,PH-GUT*2)};
+    const taken=[];
+    const put=(cx,cy,bw,bh)=>taken.push({x0:cx-bw/2,x1:cx+bw/2,y0:cy-bh/2,y1:cy+bh/2});
+    /* この範囲に必ず収まるまで小さくする */
+    const fitIn=(txt,maxFs,weight,padRateW,padRateH)=>{
+      let fs=maxFs;
+      for(let k=0;k<26;k++){
+        const f=fitVert(txt,U.w*0.62,U.h*0.62,fs,weight);
+        const bw=f.w+f.fs*padRateW,bh=f.h+f.fs*padRateH;
+        if((bw<=U.w&&bh<=U.h)||f.fs<=11)return {f,bw,bh};
+        fs=Math.max(11,f.fs-1);
+      }
+      const f=fitVert(txt,U.w*0.62,U.h*0.62,11,weight);
+      return {f,bw:Math.min(U.w,f.w+f.fs*padRateW),bh:Math.min(U.h,f.h+f.fs*padRateH)};
+    };
+
+    /* ナレーション：四角い枠 */
     const nar=(d.narration||"").trim();
     if(nar){
-      const f=fitVert(breakCommas(nar),PW*0.26,PH*0.72,Math.min(PH*0.068,PW*0.052,34),600);
+      const r=fitIn(breakCommas(nar),Math.min(U.h*0.070,U.w*0.055,34),600,0.8,0.8);
+      const f=r.f;
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
-      const bw=f.w+f.fs*0.8,bh=f.h+f.fs*0.8,bx=X+pad,by=Y+pad;
+      const pos=placeBox(dm,r.bw,r.bh,U.x+r.bw/2,U.y+r.bh/2,taken,U,{top:true});
+      const bx=pos.cx-r.bw/2,by=pos.cy-r.bh/2;
       ctx.save();
       ctx.fillStyle="#fff";ctx.strokeStyle="#111";ctx.lineWidth=Math.max(2,f.fs*0.09);
-      ctx.fillRect(bx,by,bw,bh);ctx.strokeRect(bx,by,bw,bh);
+      ctx.fillRect(bx,by,r.bw,r.bh);ctx.strokeRect(bx,by,r.bw,r.bh);
       ctx.fillStyle="#111";
-      vDraw(ctx,f.cols,bx+bw-f.fs*0.40,by+f.fs*0.40,f.fs,f.lh,f.colW);
+      vDraw(ctx,f.cols,bx+r.bw-f.fs*0.40,by+f.fs*0.40,f.fs,f.lh,f.colW);
       ctx.restore();
-      leftUsed=bw+pad;
+      put(pos.cx,pos.cy,r.bw,r.bh);
     }
 
-    /* セリフ：読み順に右から左へ */
+    /* セリフ：右から左へ。顔や人物を避けて置く */
     const lines=(d.lines||[]).filter(l=>l&&l.text&&l.text.trim());
     if(lines.length){
-      const aX=X+leftUsed+pad,aW=Math.max(PW*0.30,PW-leftUsed-pad*2),slot=aW/lines.length;
-      lines.forEach((l,k)=>{
-        const txt=breakCommas(String(l.text).replace(/^\u300c|\u300d$/g,""));
+      const base=Math.min(U.h*0.085,U.w*0.075,38);
+      const build=sc=>lines.map(l=>{
         const kd=l.kind||"normal";
-        const mag=kd==="shout"?1.22:(kd==="small"?0.80:1);
-        const f=fitVert(txt,slot*0.66,PH*0.46,Math.min(PH*0.075,slot*0.26,36)*mag,kd==="shout"?800:700);
-        ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
-        const bal=kd==="shout"?1.55:1.75;
-        const rw=(f.w+f.fs*bal)/2,rh=(f.h+f.fs*(kd==="shout"?1.15:1.35))/2;
-        let cx=aX+aW-(k+0.5)*slot,cy=Y+pad+rh+PH*0.015;
-        cx=Math.max(aX+rw+2,Math.min(aX+aW-rw-2,cx));
-        cy=Math.max(Y+rh+3,Math.min(Y+PH*0.62,cy));
-        const tx=Math.max(X+PW*0.10,Math.min(X+PW*0.90,aX+aW-(k+0.5)*slot)),
-              ty=Math.min(Y+PH*0.86,cy+rh+PH*0.14);
-        const kind=l.kind||"normal";
-        drawBubble(ctx,cx,cy,rw,rh,tx,ty,kind);
+        const mag=kd==="shout"?1.16:(kd==="small"?0.82:1);
+        const txt=breakCommas(String(l.text).replace(/^\u300c|\u300d$/g,""));
+        const bal=kd==="shout"?1.55:1.80,vb=kd==="shout"?1.15:1.40;
+        const r=fitIn(txt,Math.max(11,base*sc*mag),kd==="shout"?800:700,bal,vb);
+        return {kd,f:r.f,bw:r.bw,bh:r.bh,rw:r.bw/2,rh:r.bh/2};
+      });
+      let items=null;
+      for(let sc=1;sc>=0.44;sc-=0.07){
+        const it=build(sc);
+        const total=it.reduce((a,x)=>a+x.bw,0)+Math.min(U.w,U.h)*0.035*(it.length-1);
+        const tall=Math.max.apply(null,it.map(x=>x.bh));
+        if(total<=U.w&&tall<=U.h*0.62){items=it;break;}
+      }
+      if(!items)items=build(0.44);
+
+      let prevCx;
+      items.forEach((it,k)=>{
+        const idealCx=U.x+U.w-it.rw-k*(U.w/items.length)*0.92;
+        const idealCy=U.y+it.rh;
+        const pos=placeBox(dm,it.bw,it.bh,idealCx,idealCy,taken,U,
+                           {top:true,maxCx:(prevCx!==undefined?prevCx-it.bw*0.10:undefined)});
+        const tt=tailTarget(dm,pos.cx,pos.cy,it.bw,it.bh,U);
+        drawBubble(ctx,pos.cx,pos.cy,it.rw,it.rh,tt.tx,tt.ty,it.kd);
         ctx.save();ctx.fillStyle="#111";
-        ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
-        vDraw(ctx,f.cols,cx+f.w/2,cy-f.h/2,f.fs,f.lh,f.colW);
+        ctx.font=`${it.f.weight} ${it.f.fs}px ${TXT_FONT}`;
+        vDraw(ctx,it.f.cols,pos.cx+it.f.w/2,pos.cy-it.f.h/2,it.f.fs,it.f.lh,it.f.colW);
         ctx.restore();
+        put(pos.cx,pos.cy,it.bw,it.bh);
+        prevCx=pos.cx;
       });
     }
 
     /* オノマトペ：白抜きの太字 */
     const ono=(d.ono||"").trim();
     if(ono){
-      const f=fitVert(ono,PW*0.30,PH*0.40,Math.min(PH*0.16,PW*0.13,64),800);
+      const r=fitIn(ono,Math.min(U.h*0.17,U.w*0.14,64),800,0.4,0.4);
+      const f=r.f;
       ctx.save();
       ctx.font=`${f.weight} ${f.fs}px ${TXT_FONT}`;
+      const pos=placeBox(dm,r.bw,r.bh,U.x+r.bw/2,U.y+U.h-r.bh/2,taken,U,{bottom:true});
       ctx.lineWidth=Math.max(3,f.fs*0.20);ctx.strokeStyle="#fff";ctx.lineJoin="round";
-      const oW=f.w,oH=f.h;
-      let rx=X+leftUsed+pad+oW;
-      rx=Math.min(X+PW-pad,Math.max(X+leftUsed+pad+oW,rx));
-      if(rx-oW<X+leftUsed+pad)rx=X+leftUsed+pad+oW;
-      if(rx>X+PW-pad)rx=X+PW-pad;
-      let ty2=Y+PH*0.52;
-      if(ty2+oH>Y+PH-pad)ty2=Math.max(Y+pad,Y+PH-pad-oH);
       ctx.textAlign="center";ctx.textBaseline="middle";
+      const rx=pos.cx+f.w/2,ty2=pos.cy-f.h/2;
       f.cols.forEach((col,ci)=>{
         const x=rx-ci*f.colW-f.colW/2;
         col.forEach((ch,ii)=>{
@@ -5643,6 +5783,7 @@ async function composeText(i){
         });
       });
       ctx.restore();
+      put(pos.cx,pos.cy,r.bw,r.bh);
     }
   });
   return cv.toDataURL("image/jpeg",0.9);
@@ -5670,6 +5811,138 @@ async function recomposeOne(i){
 function toggleAppText(v){
   P.plan.appText=!!v;save();
   recomposeAll(false);
+}
+/* ============ 言葉で書けば直る：修正のやり取り ============ */
+let fixPage=0;
+function pageAsText(i){
+  const p=P.pages[i],t=TEMPLATES[p.tpl]||TEMPLATES[1];
+  let q=`[P${i+1}]${p.title?" "+p.title:""}\n`;
+  (t.panels||[]).forEach((pn,j)=>{
+    const d=(p.panels||[])[j]||{};
+    q+=`コマ${j+1}（${pn.pos}）\n`;
+    if(d.narration)q+=`${j+1}N ${d.narration}\n`;
+    (d.lines||[]).forEach(l=>{if(l.text)q+=`${j+1}S ${charName(l.charId)||"？"}|${l.text}\n`;});
+    if(d.bg)q+=`${j+1}E ${d.bg}\n`;
+    if(d.bgType)q+=`${j+1}G ${d.bgType}\n`;
+    if(d.ono)q+=`${j+1}O ${d.ono}\n`;
+  });
+  return q;
+}
+function fixPrompt(i,order){
+  let q=`あなたはプロのマンガ原作者です。下の「今のページ」を、指示のとおりに直してください。\n\n`;
+  q+=`■ 作品の前提\n`;
+  if(P.meta.title)q+=`タイトル：${P.meta.title}\n`;
+  q+=`目的：${ucLabels()||"—"}　読者：${P.meta.target||"—"}\n`;
+  if(P.scenario.message)q+=`伝えたいこと：${P.scenario.message}\n`;
+  q+=`\n■ 登場人物\n`;
+  P.characters.forEach(c=>{
+    q+=`・${c.name||"名前未設定"}${c.role?"（"+c.role+"）":""}\n`;
+    (c.calls||[]).forEach(x=>{if(x.by&&x.name)q+=`　呼び方：${x.by}は「${x.name}」と呼ぶ\n`;});
+  });
+  if(!P.characters.length)q+=`（未登録）\n`;
+  q+=`\n■ 今のページ\n`+pageAsText(i);
+  q+=`\n■ 直しの指示\n${order}\n`;
+  const cr=ruleLines(COMMON_RULES),or2=ruleLines(P.rules.once);
+  if(cr.length){q+=`\n■ いつも守るルール\n`;cr.forEach(x=>q+="・"+x+"\n");}
+  if(or2.length){q+=`\n■ 今回だけのルール\n`;or2.forEach(x=>q+="・"+x+"\n");}
+  q+=`\n■ 守ること\n`;
+  q+=`・指示された箇所だけ直す。それ以外は今のままにする\n`;
+  q+=`・コマ数は変えない\n`;
+  q+=`・セリフは1つの吹き出しにつき30字以内。読点「、」は使わない\n`;
+  q+=`・話者名は上の登場人物の名前をそのまま使う。登場人物にいない人が話すときは役割名（例：高齢の酥農家）を使う\n`;
+  q+=`・「E」には、誰がどんな表情で何をしているかを具体的に書く\n`;
+  q+=`\n■ 出力の形式（この形式以外は何も書かない）\n`;
+  q+=`[P${i+1}]\n1N ナレーション（不要なら行ごと省く）\n1S 話者名|セリフ\n1E このコマの絵の内容\n1G 背景ID\n1O オノマトペ（不要なら省く）\n2N …（コマ番号を変えて同じ形式）\n`;
+  return q;
+}
+async function runFix(){
+  const ta=document.getElementById("fixText");
+  const order=(ta&&ta.value||"").trim();
+  if(!order){alert("直したいことを書いてください。\n例：落胆しているのは高齢化した酥農家。安田社長ではない");return;}
+  const i=fixPage;
+  if(!P.pages[i]){alert("ページがありません。");return;}
+  const key=orKey();
+  if(!key){alert("先にAIキーを設定してください。");return;}
+  const scope=(document.querySelector('input[name="fixScope"]:checked')||{}).value||"page";
+  const btn=document.getElementById("fixBtn"),st=document.getElementById("fixStatus");
+  if(btn)btn.disabled=true;
+  if(st)st.textContent="直しています…";
+  try{
+    const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
+      headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
+      body:JSON.stringify({model:SCENARIO_MODEL,messages:[{role:"user",content:fixPrompt(i,order)}]})});
+    if(!r.ok)throw new Error("通信エラー "+r.status);
+    const j=await r.json();
+    addCost("直し",(j.usage||{}).cost);
+    const txt=(j.choices&&j.choices[0]&&j.choices[0].message.content)||"";
+    const n=applyPanelsText(txt);
+    if(!n)throw new Error("直した内容を読み取れませんでした。もう一度お試しください。");
+    const p=P.pages[i];
+    p.fixLog=p.fixLog||[];
+    p.fixLog.push({text:order,scope:scope,at:nowStamp(),done:false});
+    if(scope==="common"){
+      COMMON_RULES=(COMMON_RULES?COMMON_RULES.replace(/\n+$/,"")+"\n":"")+order;
+      lsSet(CKEY,COMMON_RULES);
+      const rc=document.getElementById("r-common");if(rc)rc.value=COMMON_RULES;
+    }else if(scope==="once"){
+      P.rules.once=(P.rules.once?P.rules.once.replace(/\n+$/,"")+"\n":"")+order;
+      const ro=document.getElementById("r-once");if(ro)ro.value=P.rules.once;
+    }
+    save();
+    if(ta)ta.value="";
+    if(st)st.textContent="";
+    renderDrawBox();renderPages();renderReadAll();renderOut();
+    const msg=p.img
+      ?`${i+1}ページの中身を直しました。\n\n絵に反映させるには描き直しが必要です（約${YEN_PER_PAGE}円）。\n今すぐ描き直しますか？`
+      :`${i+1}ページの中身を直しました。`;
+    if(p.img){if(confirm(msg))drawPages([i]);}
+    else{toast("直しました");alert(msg);}
+  }catch(e){
+    if(st)st.textContent="";
+    alert("直せませんでした。\n"+(e&&e.message||e));
+  }
+  if(btn)btn.disabled=false;
+}
+function setFixPage(i){
+  fixPage=i;renderFixTalk();
+  const b=document.getElementById("fixTalkBox");
+  if(b)b.scrollIntoView({behavior:"smooth",block:"center"});
+  const ta=document.getElementById("fixText");if(ta)ta.focus();
+}
+function delFixLog(i,k){
+  const p=P.pages[i];if(!p||!p.fixLog)return;
+  p.fixLog.splice(k,1);save();renderFixTalk();
+}
+function renderFixTalk(){
+  const box=document.getElementById("fixTalkBox");if(!box)return;
+  if(!P.pages.length){box.innerHTML="";return;}
+  if(fixPage>=P.pages.length)fixPage=0;
+  const p=P.pages[fixPage];
+  const opts=P.pages.map((x,i)=>`<option value="${i}" ${i===fixPage?"selected":""}>${i+1}ページ目　${esc((x.title||"").slice(0,14))}</option>`).join("");
+  const log=(p.fixLog||[]).map((f,k)=>`<div class="it"><b>${f.scope==="common"?"今後も":(f.scope==="once"?"今回中":"このページ")}</b>
+    <span>${esc(f.text)}<span style="color:var(--ink-3);font-size:11px">　${esc(f.at||"")}</span></span>
+    <button class="rm" onclick="delFixLog(${fixPage},${k})">削除</button></div>`).join("");
+  box.innerHTML=`<div class="fixtalk">
+    <h3>気になるところを直す（普通の言葉で書いてください）</h3>
+    <div class="row" style="margin:0 0 8px">
+      <select id="fixSel" style="max-width:280px">${opts}</select>
+      <span style="font-size:11.5px;color:var(--ink-2)">例：落胆しているのは高齢化した酥農家。安田社長ではない</span>
+    </div>
+    <textarea id="fixText" placeholder="直したいことをそのまま書いてください。&#10;例：2コマ目で落胆しているのは高齢化した酥農家。安田社長はそれを見ている側にする"></textarea>
+    <div class="row">
+      <label class="sc"><input type="radio" name="fixScope" value="page" checked> このページだけ</label>
+      <label class="sc"><input type="radio" name="fixScope" value="once"> この案件の間はずっと守る</label>
+      <label class="sc"><input type="radio" name="fixScope" value="common"> 今後の全案件でずっと守る</label>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="fixBtn" onclick="runFix()">このとおりに直す</button>
+      <span style="font-size:12px" id="fixStatus"></span>
+      <span style="font-size:11.5px;color:var(--ink-3)">中身を直したあと、絵を描き直すか聞きます。</span>
+    </div>
+    ${log?`<div class="fixlog"><div style="font-size:11px;color:var(--ink-3);margin-bottom:3px">このページへの直しの履歴</div>${log}</div>`:""}
+  </div>`;
+  const sel=document.getElementById("fixSel");
+  if(sel)sel.onchange=()=>{fixPage=+sel.value;renderFixTalk();};
 }
 function stopDraw(){
   window.__stopDraw=true;
@@ -5715,13 +5988,15 @@ function renderDrawBox(keepStatus){
         <div class="pn">${i+1}. ${esc((p.title||"").slice(0,12))||"（無題）"}</div>
         <div class="pa">
           <button class="btn sm" onclick="drawOne(${i})">${p.img?"作り直す":"作る"}</button>
+          <button class="btn sm" onclick="setFixPage(${i})">直しを伝える</button>
           ${p.art?`<button class="btn sm" onclick="recomposeOne(${i})">文字を入れ直す</button>`
             :(p.img?`<button class="btn sm" onclick="drawOne(${i},true)">文字を直す</button>`:"")}
           ${p.img?`<button class="btn sm" onclick="showPageImage(${i})">大きく</button>`:""}
         </div>
       </div>
-    </div>`).join("")}</div>`:""}`;
-  renderCostLines();
+    </div>`).join("")}</div>`:""}
+  <div id="fixTalkBox"></div>`;
+  renderCostLines();renderFixTalk();
 }
 function showPageImage(i){
   const p=P.pages[i];if(!p||!p.img)return;
